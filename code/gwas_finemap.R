@@ -228,7 +228,7 @@ load("/drive-pool/data/peter_data/genetic_programming/code/brca/snpLDproxy.rda")
 ## Filter ld proxy for snps with an R2 of 0.9 and MAF of 0.05 or greater
 ld <- ldproxy_res %>% dplyr::filter(R2 >= 0.6,
                                     Dprime >= 0.9) %>%
-  dplyr::select(RS_Number, Coord, snp)
+  dplyr::select(RS_Number, Coord, snp, Alleles, Distance)
 
 ## There are cases where the RS_number and snp (lead snp) are the same. Dont know why, but remove those cases.
 ld <- ld[-which(ld$RS_Number == ld$snp),] 
@@ -236,6 +236,7 @@ ld <- ld[-which(ld$RS_Number == ld$snp),]
 ## Are there any lead snps in ld with another snp
 table(unique(ld$snp) %in% ld$RS_Number) ## No so we're good.
 
+## Plotting distribution of snps in ld with the lead snp
 plot.n.snps <- as.data.frame(table(ld$snp)) ## There's 174 lead snps that have ld with other snps
 ggplot(data = plot.n.snps, aes(x = Freq)) +
   geom_histogram() +
@@ -243,6 +244,15 @@ ggplot(data = plot.n.snps, aes(x = Freq)) +
   xlab("SNPs in LD") + ylab("Count") +
   ggtitle("Distribution of SNPs in LD for 174 breast cancer risk SNPs")
 
+## Plotting the distribution of distance of snps in LD
+ggplot(data = ld, aes(x = Distance, group = LEAD_SNP)) +
+  geom_density(alpha = 0.05) + 
+  theme_minimal() +
+  xlab("Distance from Lead SNP") + ylab("Density") +
+  ggtitle("Distribution of Distance from Lead SNP for 174 breast cancer risk SNPs") +
+  ylim(0,1e-4) +
+  annotate("text", label = paste0("min:", min(ld$Distance)), size = 4, x = -3e5, y = 2.5e-5) +
+  annotate("text", label = paste0("max:", max(ld$Distance)), size = 4, x = 3e5, y = 2.5e-5)
 
 ## Some snps dont have rsid, just coord. Lets add corrd to rsid for those cases
 ld[which(ld$RS_Number == "."), "RS_Number"] <- ld[which(ld$RS_Number == "."), "Coord"]
