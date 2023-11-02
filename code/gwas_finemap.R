@@ -261,4 +261,6 @@ ld <- ld %>% separate(Coord, c("CHR_ID", "CHR_POS"), sep = ":") %>%
   mutate(CHR_ID = gsub(pattern = ".*chr", replacement = "", x = CHR_ID)) %>%
   dplyr::rename("SNPS"="RS_Number", "LEAD_SNP"="snp")
 
+save(ld, file = "/drive-pool/data/peter_data/genetic_programming/code/brca/snpinLD.rda")
+
 

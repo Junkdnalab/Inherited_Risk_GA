@@ -23,65 +23,6 @@ suppressMessages(c(
 ))
 ```
 
-```{r}
-rm(list = ls(all.names = T)); gc()
-
-gwas.catalog <- fread(file = "/drive-pool/data/peter_data/genetic_programming/gwas/gwas_catalog_v1.0.2-associations_e109_r2023-06-03.tsv")
-
-## Filter for phenotype of interest. Not sure whats available, but will be selecting phenotypes with breast or brca in it.
-toi <- c("breast", "brca")
-
-b.phenotype <- unique(gwas.catalog$MAPPED_TRAIT) %>%
-  .[grep(pattern = paste(toi,collapse="|"), x = .)]
-## Looking through b.phenotype, breast carcinoma and breast cancer look like the best candidates.
-
-## Filter for those two traits
-b.gwas <- gwas.catalog %>% dplyr::filter(MAPPED_TRAIT %in% c("breast carcinoma", "breast cancer"))
-rm(toi, b.phenotype, gwas.catalog); gc()
-
-## Lets look at what study to choose
-b.studies <- b.gwas[, c("DATE ADDED TO CATALOG", "PUBMEDID", "FIRST AUTHOR", "DATE", "JOURNAL", "LINK", "STUDY", "DISEASE/TRAIT", "MAPPED_TRAIT")] %>%
-  distinct()
-
-## We are going to chose PMID 32424353 and 29059683. PMID 32424353 is 133,384 breast cancer cases and 113,789 controls identified 32 more novel snps in additional to previous identified snps (PMID 29059683).
-signif.pval <- 5e-8
-
-gwas_32424353_29059683 <- b.gwas %>% dplyr::filter(PUBMEDID %in% c(32424353, 29059683)) %>% 
-  dplyr::rename("PVALUE" = "P-VALUE") %>%
-  mutate(PVALUE = as.numeric(PVALUE)) %>%
-  dplyr::filter(PVALUE <= signif.pval) %>%
-  dplyr::select(REGION, CHR_ID, CHR_POS, SNPS)
-
-## If snp label has chr in it. We need to process it so we can extract the chr_id and pos and then determine region.
-if(length(grep(pattern = ":", x = gwas_32424353_29059683$SNPS)) > 0) {
-  nonrsid.cases <- grep(pattern = ":", x = gwas_32424353_29059683$SNPS)
-  for(n in nonrsid.cases) {
-    df <- gwas_32424353_29059683[n, ]$SNPS %>% strsplit(x = ., split = ":") %>% unlist()
-    if(grepl(pattern = "chr", x = df[1])) {
-      chr_id <- substring(text = df[1], first = 4, last = 5)
-    } else {
-      chr_id <- df[1]
-    }
-    gwas_32424353_29059683[n, "CHR_ID"] <- chr_id
-    gwas_32424353_29059683[n, "CHR_POS"] <- as.numeric(df[2])
-    gwas_32424353_29059683[n, "REGION"] <- position2Cytoband(chrom = chr_id, 
-                                                             position = as.numeric(df[2]), 
-                                                             units = "hg38")
-    
-  }
-}; rm(nonrsid.cases, df, n, signif.pval, chr_id, b.gwas, b.studies); gc()
-
-# snps.mb <- snps.from.rsid(rsid = gwas_32424353_29059683[which(gwas_32424353_29059683$CHR_ID == "")]$SNPS,
-#                           dbSNP = SNPlocs.Hsapiens.dbSNP155.GRCh38,
-#                           search.genome = BSgenome.Hsapiens.UCSC.hg38)
-
-## These snps are not mapped to hg38. Will remove them
-gwas_32424353_29059683 <- gwas_32424353_29059683[-which(gwas_32424353_29059683$REGION == ""),] %>%
-  distinct()
-
-#save(gwas_32424353_29059683, file = "/drive-pool/data/peter_data/genetic_programming/code/brca/gwas_32424353_29059683.rda")
-```
-
 Get nearby genes for each credible snp
 ```{r}
 ## Load RNA-seq data
@@ -137,52 +78,123 @@ geneAnnot.df$seqnames <- as.character(geneAnnot.df$seqnames)
 #save(geneAnnot.df, file = "/drive-pool/data/peter_data/genetic_programming/code/brca/geneAnnot.df.rda")
 
 ## Prep data for finding nearest genes
-load("/drive-pool/data/peter_data/genetic_programming/code/brca/gwas_finemap.rda")
-snps.df <- gwas_finemap %>% dplyr::select(-REGION) %>%
-  dplyr::rename("seqnames"="CHR_ID", "start"="CHR_POS", "SNP_id"="SNPS") %>% ## Rename columns
-  mutate(seqnames = paste0("chr", seqnames)) %>% ## add chr before chromosome id
-  distinct() ## Keep unique observations
+load("/drive-pool/data/peter_data/genetic_programming/code/brca/gwas_finemap.rda") ## Finemap snp
+load("/drive-pool/data/peter_data/genetic_programming/code/brca/snpinLD.rda") ## Snps in LD with finemap snp
 
-#gene.tss <- geneAnnot.df %>% dplyr::select(seqnames, tss, x) %>% dplyr::rename("gene_name" = "x")
+## Simply df to only include relevant column. Also, add column to say what SNPs have LD
+snps.df <- gwas_finemap %>% dplyr::select(CHR_ID, CHR_POS, SNP_ID_CURRENT) %>%
+  dplyr::rename("seqnames"="CHR_ID", "start"="CHR_POS", "SNP_id"="SNP_ID_CURRENT") %>% ## Rename columns
+  mutate(seqnames = paste0("chr", seqnames)) %>% ## add chr before chromosome id
+  distinct() %>% ## Keep unique observations
+  left_join(x = ., ## What lead SNPs have snps in ld
+            y = data.frame(SNP_id = unique(ld$LEAD_SNP),
+                           LD = 1),
+            by = "SNP_id") %>%
+  mutate(LD = replace_na(LD, replace = 0))
+
+## Create df to show range of each lead snp based on all SNPs in LD. We are doing this because
+## we are trying to include all snps because we don't know the casual snp. This is just the first 
+## pass of trying it.
+ldsnps.range <- ld %>% dplyr::group_by(LEAD_SNP) %>%
+  dplyr::summarise(min = min(CHR_POS),
+                   max = max(CHR_POS))
+
 gene.tss <- geneAnnot.df %>% dplyr::select(seqnames, tss, gene_name, gene_type)
 
-gwas.list <- as.list(as.data.frame(t(snps.df[, c("seqnames", "start", "SNP_id")])))
+gwas.list <- as.list(as.data.frame(t(snps.df[, c("seqnames", "start", "SNP_id", "LD")])))
 
 distance_thres <- 2e5 ## Distance threshold is 200kb from snp left and right
 
-elmer.style <- TRUE
+elmer.style <- FALSE ## Elmer style is just what the package elmer does. Picks X ngenes left and right of chr position of interest
 
 nearbygenes <- mclapply(X = gwas.list, FUN = function(x) {
   
   gA.filter <- gene.tss %>% dplyr::filter(seqnames == x[1])
-  
-  Rside <- gA.filter %>% dplyr::filter(tss >= as.numeric(x[2])) %>%
-    mutate(distance_tss = tss - as.numeric(x[2])) %>%
-    arrange(., distance_tss)
-  if(elmer.style == TRUE) {
-    if(nrow(Rside) > 4) {
-      Rside <- Rside[1:5,]
-    }
-  } else {
-    Rside <- Rside %>% dplyr::filter(distance_tss <= distance_thres)
-  }
-  if(nrow(Rside) == 0) {
+  ## Need to add code for after
+  if(x[4] == "0") { ## If there is no SNP in LD. Use the CHR_POS
+    ## No SNP, get all genes within distance threshold left and right of snp (400kb window)
+    ## If less than 10 genes, keep expanding until you get 10 genes total (5 left and 5 right)
+    
+    ## Work on right side of SNP (downstream)
+    Rside <- gA.filter %>% dplyr::filter(tss >= as.numeric(x[2])) %>%
+      mutate(distance_tss = tss - as.numeric(x[2])) %>%
+      arrange(., distance_tss)
+    if(elmer.style == TRUE) {
+      if(nrow(Rside) > 4) {
+        Rside <- Rside[1:5,]
+        }
+      } else {
+        Rside <- Rside %>% dplyr::filter(distance_tss <= distance_thres)
+      }
+    if(nrow(Rside) == 0) {
+      ## Do nothing
+      } else {
+        Rside <- Rside %>% mutate(snp = x[3],
+                                  side = paste0("R", c(1:nrow(.))))
+      }
+    
+    ## Work on left side of SNP (upstream)
+    Lside <- gA.filter %>% dplyr::filter(tss < as.numeric(x[2])) %>%
+      mutate(distance_tss = tss - as.numeric(x[2])) %>%
+      arrange(., desc(distance_tss))
+    if(elmer.style == TRUE) {
+      if(nrow(Lside) > 4) {
+        Lside <- Lside[1:5,]
+        }
+      } else {
+        Lside <- Lside %>% dplyr::filter(distance_tss >= -distance_thres)
+        }
+  if(nrow(Lside) == 0) {
     ## Do nothing
   } else {
-    Rside <- Rside %>% mutate(snp = x[3],
-                              side = paste0("R", c(1:nrow(.))))
+    Lside <- Lside %>% arrange(., distance_tss) %>%
+      mutate(snp = x[3],
+             side = paste0("L", rev(c(1:nrow(.)))))
   }
+  } ## End of no SNP in LD function
   
-  Lside <- gA.filter %>% dplyr::filter(tss < as.numeric(x[2])) %>%
-    mutate(distance_tss = tss - as.numeric(x[2])) %>%
-    arrange(., desc(distance_tss))
-  if(elmer.style == TRUE) {
-    if(nrow(Lside) > 4) {
-      Lside <- Lside[1:5,]
-    }
-  } else {
-    Lside <- Lside %>% dplyr::filter(distance_tss >= -distance_thres)
-  }
+  if(x[4] == "1") { ## If there is SNP in LD. Use the MIN and MAX CHR_POS based on all snps
+    ## Get the min and max CHR_POS from the set of SNPS in LD.
+    ## Expand coords by distance_thres
+    ## Use new range to gather nearby genes
+    spec.snp.range <- ldsnps.range %>% dplyr::filter(LEAD_SNP == x[3]) %>% dplyr::select(min, max) %>%
+      as.numeric()
+    ## Expand coords by distance thres. Subtract left and add right
+    spec.snp.range[1] <- spec.snp.range[1] - 2e5
+    spec.snp.range[2] <- spec.snp.range[2] + 2e5
+    ## Find midpoint from that range now.
+    mid.point.range <- round(mean(spec.snp.range), digit = 0) ## Find midpoint and round to the nearest whole number
+    
+    ## Work on right side of SNP (downstream)
+    Rside <- gA.filter %>% dplyr::filter(tss >= as.numeric(mid.point.range)) %>%
+      mutate(distance_tss = tss - as.numeric(mid.point.range)) %>%
+      arrange(., distance_tss)
+    if(elmer.style == TRUE) {
+      if(nrow(Rside) > 4) {
+        Rside <- Rside[1:5,]
+        }
+      } else {
+        ## distance thres is abs(mid-spec.snp.range[1/2])
+        Rside <- Rside %>% dplyr::filter(distance_tss <= (spec.snp.range[2] - mid.point.range))
+      }
+    if(nrow(Rside) == 0) {
+      ## Do nothing
+      } else {
+        Rside <- Rside %>% mutate(snp = x[3],
+                                  side = paste0("R", c(1:nrow(.))))
+      }
+    
+    ## Work on left side of SNP (upstream)
+    Lside <- gA.filter %>% dplyr::filter(tss < as.numeric(mid.point.range)) %>%
+      mutate(distance_tss = tss - as.numeric(mid.point.range)) %>%
+      arrange(., desc(distance_tss))
+    if(elmer.style == TRUE) {
+      if(nrow(Lside) > 4) {
+        Lside <- Lside[1:5,]
+        }
+      } else {
+        Lside <- Lside %>% dplyr::filter(distance_tss >= (spec.snp.range[1] - mid.point.range))
+        }
   if(nrow(Lside) == 0) {
     ## Do nothing
   } else {
@@ -191,11 +203,16 @@ nearbygenes <- mclapply(X = gwas.list, FUN = function(x) {
              side = paste0("L", rev(c(1:nrow(.)))))
   }
   
-  if(nrow(Rside) > 0 & nrow(Lside) > 0) {
+  } ## End of SNP in LD function
+  
+  ###############################
+  ## Combine R and L side gene ##
+  ###############################
+  if(nrow(Rside) > 0 & nrow(Lside) > 0) { ## Store both
     res <- rbind(Lside, Rside)
-  } else if (nrow(Rside) == 0 & nrow(Lside) > 0) {
+  } else if (nrow(Rside) == 0 & nrow(Lside) > 0) { ## If no Rside, only store Lside
     res <- Lside
-  } else if ((nrow(Rside) > 0 & nrow(Lside) == 0)) {
+  } else if ((nrow(Rside) > 0 & nrow(Lside) == 0)) { ## If no Lside, only store Rside
     res <- Rside
   }
   
@@ -204,7 +221,7 @@ mc.cores = 20
 )
 
 nearbygenes_10xgenomics <- as.data.frame(do.call(rbind, nearbygenes))
-save(nearbygenes_10xgenomics, file = "/drive-pool/data/peter_data/genetic_programming/breast_nearbygenes_200kb_elmer_10xgenomic.rda")
+save(nearbygenes_10xgenomics, file = "/drive-pool/data/peter_data/genetic_programming/breast_nearbygenes_200kb_notelmer_10xgenomic_with_LD.rda")
 
 as.data.frame(table(nearbygenes_10xgenomics$snp)) %>%
   ggplot(data = ., aes(x = Freq)) +
@@ -519,6 +536,7 @@ bg_nearbygenes <- mclapply(X = gwas.list, FUN = function(x) {
     Rside <- Rside %>% mutate(snp = x[3],
                               side = paste0("R", c(1:nrow(.))))
   }
+  
   
   Lside <- gA.filter %>% dplyr::filter(tss < as.numeric(x[2])) %>%
     mutate(distance_tss = tss - as.numeric(x[2])) %>%
