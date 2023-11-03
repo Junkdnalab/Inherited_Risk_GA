@@ -107,6 +107,8 @@ distance_thres <- 2e5 ## Distance threshold is 200kb from snp left and right
 
 elmer.style <- FALSE ## Elmer style is just what the package elmer does. Picks X ngenes left and right of chr position of interest
 
+min.genes <- 10 ## Set the min ngenes a lead snp should have. only needed when elmer.style is false
+
 nearbygenes <- mclapply(X = gwas.list, FUN = function(x) {
   
   gA.filter <- gene.tss %>% dplyr::filter(seqnames == x[1])
@@ -123,9 +125,20 @@ nearbygenes <- mclapply(X = gwas.list, FUN = function(x) {
       if(nrow(Rside) > 4) {
         Rside <- Rside[1:5,]
         }
-      } else {
-        Rside <- Rside %>% dplyr::filter(distance_tss <= distance_thres)
+      } else { ## If elmer style is FALSE do this
+        
+        if(!is.null(min.genes)) { ## If there is a min.gene... do this
+          Rgenes <- Rside %>% dplyr::filter(distance_tss <= distance_thres) ## Check how many genes after dist.thres filtering
+          if(nrow(Rgenes) > 4) { ## If there are more than 5 genes...
+            Rside <- Rgenes ## Don't change anything
+          } else { ## If less than 5, gather genes based on min.genes
+            Rside <- Rside[1:(min.genes/2),]
+            }
+        } else { ## if min.gene is null (no elmer style)
+          Rside <- Rside %>% dplyr::filter(distance_tss <= distance_thres)
+        }
       }
+    
     if(nrow(Rside) == 0) {
       ## Do nothing
       } else {
@@ -142,8 +155,18 @@ nearbygenes <- mclapply(X = gwas.list, FUN = function(x) {
         Lside <- Lside[1:5,]
         }
       } else {
-        Lside <- Lside %>% dplyr::filter(distance_tss >= -distance_thres)
+        if(!is.null(min.genes)) { ## If there is a min.gene... do this
+          Lgenes <- Lside %>% dplyr::filter(distance_tss >= -distance_thres) ## Check how many genes after dist.thres filtering
+          if(nrow(Lgenes) > 4) { ## If there are more than 5 genes...
+            Lside <- Lgenes ## Don't change anything
+          } else { ## If less than 5, gather genes based on min.genes
+            Lside <- Lside[1:(min.genes/2),]
+            }
+        } else { ## if min.gene is null (no elmer style)
+          Lside <- Lside %>% dplyr::filter(distance_tss >= -distance_thres)
         }
+      }
+    
   if(nrow(Lside) == 0) {
     ## Do nothing
   } else {
@@ -175,8 +198,18 @@ nearbygenes <- mclapply(X = gwas.list, FUN = function(x) {
         }
       } else {
         ## distance thres is abs(mid-spec.snp.range[1/2])
-        Rside <- Rside %>% dplyr::filter(distance_tss <= (spec.snp.range[2] - mid.point.range))
+        if(!is.null(min.genes)) { ## If there is a min.gene... do this
+          Rgenes <- Rside %>% dplyr::filter(distance_tss <= (spec.snp.range[2] - mid.point.range)) ## Check how many genes after dist.thres filtering
+          if(nrow(Rgenes) > 4) { ## If there are more than 5 genes...
+            Rside <- Rgenes ## Don't change anything
+          } else { ## If less than 5, gather genes based on min.genes
+            Rside <- Rside[1:(min.genes/2),]
+            }
+        } else { ## if min.gene is null (no elmer style)
+          Rside <- Rside %>% dplyr::filter(distance_tss <= (spec.snp.range[2] - mid.point.range))
+        }
       }
+    
     if(nrow(Rside) == 0) {
       ## Do nothing
       } else {
@@ -193,8 +226,18 @@ nearbygenes <- mclapply(X = gwas.list, FUN = function(x) {
         Lside <- Lside[1:5,]
         }
       } else {
-        Lside <- Lside %>% dplyr::filter(distance_tss >= (spec.snp.range[1] - mid.point.range))
+        if(!is.null(min.genes)) { ## If there is a min.gene... do this
+          Lgenes <- Lside %>% dplyr::filter(distance_tss >= (spec.snp.range[1] - mid.point.range)) ## Check how many genes after dist.thres filtering
+          if(nrow(Lgenes) > 4) { ## If there are more than 5 genes...
+            Lside <- Lgenes ## Don't change anything
+          } else { ## If less than 5, gather genes based on min.genes
+            Lside <- Lside[1:(min.genes/2),]
+            }
+        } else { ## if min.gene is null (no elmer style)
+          Lside <- Lside %>% dplyr::filter(distance_tss >= (spec.snp.range[1] - mid.point.range))
         }
+      }
+    
   if(nrow(Lside) == 0) {
     ## Do nothing
   } else {
