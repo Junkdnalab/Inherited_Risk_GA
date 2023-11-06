@@ -478,12 +478,21 @@ gtf.df <- gtf %>% as.data.frame() %>%
 
 ## Load snp file
 load("/drive-pool/data/peter_data/genetic_programming/code/brca/gwas_finemap.rda")
+load("/drive-pool/data/peter_data/genetic_programming/code/brca/snpinLD.rda")
 
 ## Convert both snp and gtf to granges object
 
-gwas <- GRanges(seqnames = Rle(paste0("chr", gwas_finemap$CHR_ID)),
-                range = IRanges(start = as.numeric(gwas_finemap$CHR_POS)),
-                locus = gwas_finemap$SNPS)
+all.snps <- gwas_finemap[,c("CHR_ID", "CHR_POS", "SNP_ID_CURRENT")] %>%
+  dplyr::rename("SNPS"="SNP_ID_CURRENT") %>%
+  rbind(.,
+        ld[,c("CHR_ID", "CHR_POS", "SNPS")]) %>%
+  distinct()
+
+gwas <- GRanges(seqnames = Rle(paste0("chr", all.snps$CHR_ID)),
+                range = IRanges(start = as.numeric(all.snps$CHR_POS) - 500,
+                                end = as.numeric(all.snps$CHR_POS) + 499),
+                locus = all.snps$SNPS,
+                chr_pos = as.numeric(all.snps$CHR_POS))
 
 gtf <- GRanges(seqnames = Rle(gtf.df$seqnames),
                        range = IRanges(start = gtf.df$start,
@@ -500,8 +509,14 @@ coding.hits <- cbind(as.data.frame(gwas) %>% .[hits@from,],
   remove_rownames() %>%
   dplyr::select(locus, gene) %>%
   distinct() %>%
-  mutate(coding = 1)
-#save(coding.hits, file = "/drive-pool/data/peter_data/genetic_programming/code/brca/coding.hits.rda") ## 23 hits in coding
+  mutate(coding = 1) %>%
+  left_join(x = ., 
+            y = distinct(ld[,c("SNPS", "LEAD_SNP")]), 
+            by = c("locus"="SNPS"))
+
+## Anything that is NA in LEAD_SNP is column the locus is the lead snp
+coding.hits[which(is.na(coding.hits$LEAD_SNP)), "LEAD_SNP"] <- coding.hits[which(is.na(coding.hits$LEAD_SNP)), "locus"] 
+save(coding.hits, file = "/drive-pool/data/peter_data/genetic_programming/code/brca/ld.coding.hits.rda") ## 23 hits in coding (ld now has 234 gene hit)
 
 ```
 
@@ -745,14 +760,15 @@ celltalkdb <- celltalkdb %>% separate_rows(target_genesymbol, sep = "_") %>%
   distinct()
 #table(unique(nearbygenes$gene_name) %in% unique(c(celltalkdb$source_genesymbol, celltalkdb$target_genesymbol)))
 
-celltalkdb1 <- celltalkdb %>% group_by(grp = paste(pmax(target_genesymbol, source_genesymbol), pmin(target_genesymbol, source_genesymbol), sep = "_")) #%>%
+## Getting rid of duplicates (reverse pairs)
+celltalkdb <- celltalkdb %>% group_by(grp = paste(pmax(target_genesymbol, source_genesymbol), pmin(target_genesymbol, source_genesymbol), sep = "_")) %>%
   dplyr::filter(row_number() == 1) %>%
   ungroup() %>%
   select(-grp) %>%
   distinct()
   
 celltalkdb$inter.ppi <- 1
-#save(celltalkdb, file = "/drive-pool/data/peter_data/genetic_programming/shared_data/celltalkdb.rda")
+save(celltalkdb, file = "/drive-pool/data/peter_data/genetic_programming/shared_data/celltalkdb.rda")
 ```
 
 Protein-protein interaction
@@ -816,7 +832,7 @@ str.db.info <- str.db.info %>% left_join(x = ., y = check.gene[,c("x", "Suggeste
 rm(false.gene, na.gene, suggested.gene, suggested.fix); gc()
 
 ## Load nearbygene info
-load("/drive-pool/data/peter_data/genetic_programming/breast_nearbygenes_200kb_elmer_10xgenomic.rda")
+load("/drive-pool/data/peter_data/genetic_programming/breast_nearbygenes_200kb_notelmer_10xgenomic_with_LD.rda")
 nearbygenes <- nearbygenes_10xgenomics %>%
   dplyr::select(snp, gene_name, gene_type) %>%
   left_join(x = ., y = str.db.info, by = c("gene_name"="Suggested.Symbol"))
