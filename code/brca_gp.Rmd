@@ -78,6 +78,7 @@ geneAnnot.df$seqnames <- as.character(geneAnnot.df$seqnames)
 #save(geneAnnot.df, file = "/drive-pool/data/peter_data/genetic_programming/code/brca/geneAnnot.df.rda")
 
 ## Prep data for finding nearest genes
+load("/drive-pool/data/peter_data/genetic_programming/code/brca/geneAnnot.df.rda") ## gene annotation
 load("/drive-pool/data/peter_data/genetic_programming/code/brca/gwas_finemap.rda") ## Finemap snp
 load("/drive-pool/data/peter_data/genetic_programming/code/brca/snpinLD.rda") ## Snps in LD with finemap snp
 
@@ -264,6 +265,8 @@ mc.cores = 20
 )
 
 nearbygenes_10xgenomics <- as.data.frame(do.call(rbind, nearbygenes))
+## Sometimes there are no more genes at the tail end of the chromosome. Those will come back as NA. Remove NAs
+nearbygenes_10xgenomics <- na.omit(nearbygenes_10xgenomics)
 save(nearbygenes_10xgenomics, file = "/drive-pool/data/peter_data/genetic_programming/breast_nearbygenes_200kb_notelmer_10xgenomic_with_LD.rda")
 
 as.data.frame(table(nearbygenes_10xgenomics$snp)) %>%
@@ -391,22 +394,30 @@ save(marker.list, marker.hits, file = "/drive-pool/data/peter_data/genetic_progr
 
 Promoter data
 ```{r}
-load("/drive-pool/data/peter_data/genetic_programming/breast_nearbygenes_200kb_elmer_10xgenomic.rda")
-nearbygenes <- nearbygenes_10xgenomics
+load("/drive-pool/data/peter_data/genetic_programming/breast_nearbygenes_200kb_notelmer_10xgenomic_with_LD.rda")
+nearbygenes <- nearbygenes_10xgenomics; rm(nearbygenes_10xgenomics)
 load("/drive-pool/data/peter_data/genetic_programming/code/brca/gwas_finemap.rda")
+load("/drive-pool/data/peter_data/genetic_programming/code/brca/snpinLD.rda")
 ## Get atac-seq probes and make into granges
 genes.granges <- GRanges(seqnames = Rle(nearbygenes$seqnames),
                        range = IRanges(start = nearbygenes$tss),
                        gene = nearbygenes$gene_name)
 genes.granges <- unique(genes.granges)
 
-promoter.granges <- promoters(genes.granges, upstream = 5000, downstream = 1000)
+promoter.granges <- promoters(genes.granges, upstream = 1000, downstream = 100)
 ## Make gwas snps into granges
-gwas <- GRanges(seqnames = Rle(paste0("chr", gwas_finemap$CHR_ID)),
-                range = IRanges(start = as.numeric(gwas_finemap$CHR_POS) - 500,
-                                end = as.numeric(gwas_finemap$CHR_POS) + 499),
-                locus = gwas_finemap$SNPS,
-                chr_pos = as.numeric(gwas_finemap$CHR_POS))
+
+all.snps <- gwas_finemap[,c("CHR_ID", "CHR_POS", "SNP_ID_CURRENT")] %>%
+  dplyr::rename("SNPS"="SNP_ID_CURRENT") %>%
+  rbind(.,
+        ld[,c("CHR_ID", "CHR_POS", "SNPS")]) %>%
+  distinct()
+
+gwas <- GRanges(seqnames = Rle(paste0("chr", all.snps$CHR_ID)),
+                range = IRanges(start = as.numeric(all.snps$CHR_POS) - 500,
+                                end = as.numeric(all.snps$CHR_POS) + 499),
+                locus = all.snps$SNPS,
+                chr_pos = as.numeric(all.snps$CHR_POS))
 ## Find overlaps between snp and promoter region
 hits <- findOverlaps(query = gwas, subject = promoter.granges)
 
@@ -414,8 +425,15 @@ promoter.df <- cbind(as.data.frame(gwas) %>% .[hits@from,],
                        as.data.frame(promoter.granges) %>% .[hits@to,]) %>%
   remove_rownames() %>%
   dplyr::select(locus, gene) %>%
-  mutate(promoter = 1)
-save(promoter.df, file = "/drive-pool/data/peter_data/genetic_programming/code/brca/promoter.df.rda")
+  mutate(promoter = 1) %>%
+  left_join(x = ., 
+            y = distinct(ld[,c("SNPS", "LEAD_SNP")]), 
+            by = c("locus"="SNPS"))
+
+## Anything that is NA in LEAD_SNP is column the locus is the lead snp
+promoter.df[which(is.na(promoter.df$LEAD_SNP)), "LEAD_SNP"] <- promoter.df[which(is.na(promoter.df$LEAD_SNP)), "locus"] 
+
+save(promoter.df, file = "/drive-pool/data/peter_data/genetic_programming/code/brca/ld_promoter.df.rda")
 ```
 
 Fusion Gene Objective Function
