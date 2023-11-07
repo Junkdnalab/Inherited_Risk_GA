@@ -472,6 +472,8 @@ common.atac.hit <- cbind(as.data.frame(gwas) %>% .[hits@from,],
             y = distinct(ld[,c("SNPS", "LEAD_SNP")]), 
             by = c("locus"="SNPS"))
 
+common.atac.hit[which(is.na(common.atac.hit$LEAD_SNP)), "LEAD_SNP"] <- common.atac.hit[which(is.na(common.atac.hit$LEAD_SNP)), "locus"] 
+
 save(common.atac.hit, file = "/drive-pool/data/peter_data/genetic_programming/code/brca/ld_common_atac_peak.rda")
 load("/drive-pool/data/peter_data/genetic_programming/code/brca/ld_common_atac_peak.rda")
 ## Test stuff to see peaks

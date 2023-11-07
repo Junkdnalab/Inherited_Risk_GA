@@ -864,8 +864,11 @@ promoter.df <- promoter.df %>% mutate(locus = LEAD_SNP) %>%
   dplyr::select(-LEAD_SNP) %>%
   distinct()
 load("/drive-pool/data/peter_data/genetic_programming/code/brca/breast_cevm.rda")
-load("/drive-pool/data/peter_data/genetic_programming/code/brca/atac.marker.rda")
-atac.marker <- atac.marker %>% dplyr::rename("marker.atac"="atac")
+load("/drive-pool/data/peter_data/genetic_programming/code/brca/ld_atac.marker.rda")
+atac.marker <- atac.marker %>% dplyr::rename("marker.atac"="atac") %>%
+  mutate(locus = LEAD_SNP) %>%
+  dplyr::select(-LEAD_SNP) %>%
+  distinct()
 load("/drive-pool/data/peter_data/genetic_programming/code/brca/breast.cancer.gene.rda")
 load("/drive-pool/data/peter_data/genetic_programming/code/brca/fusion.gene.rda")
 ## Merge fusion.gene with breast.cancer.gene
@@ -875,10 +878,13 @@ breast.cancer.gene <- distinct(breast.cancer.gene); rm(fusion.gene) ## Keep uniq
 #load("/drive-pool/data/peter_data/genetic_programming/shared_data/map.go.gene.cellular.component.rda")
 load("/drive-pool/data/peter_data/genetic_programming/shared_data/celltalkdb.rda")
 celltalkdb$inter.ppi <- 1 ## Add 
-load("/drive-pool/data/peter_data/genetic_programming/code/brca/common_atac_peak.rda")
-common.atac.hit <- common.atac.hit %>% dplyr::select(locus, GroupReplicate) %>%
+load("/drive-pool/data/peter_data/genetic_programming/code/brca/ld_common_atac_peak.rda")
+common.atac.hit <- common.atac.hit %>% dplyr::select(locus, GroupReplicate, LEAD_SNP) %>%
   dplyr::rename("celltype"="GroupReplicate") %>%
   mutate(common.atac = 1) %>%
+  distinct() %>%
+  mutate(locus = LEAD_SNP) %>%
+  dplyr::select(-LEAD_SNP) %>%
   distinct()
 
 
@@ -989,7 +995,7 @@ multi_proposal <- mclapply(X = as.list(1:n_proposal), FUN = function(x) {
 multi_proposal <- as.data.frame(do.call(rbind, multi_proposal))
 #save(multi_proposal, file = "/drive-pool/data/peter_data/genetic_programming/code/brca/multi_proposal_071323.rda")
 ## Objective function
-obj.fun <- c("marker.gene", "magma", "hi.mut", "ppi", "marker.ppi", "inter.ppi", "intra.ppi", "lncrna.ppi", "promoter") #, "cevm", , "multi.ppi", "findmarkers", "cevm", "go.cc.ppi" #, "marker.atac", "common.atac"
+obj.fun <- c("marker.gene", "magma", "hi.mut", "ppi", "marker.ppi", "inter.ppi", "intra.ppi", "lncrna.ppi", "promoter","marker.atac", "common.atac") #, "cevm", , "multi.ppi", "findmarkers", "cevm", "go.cc.ppi" #, 
 
 
 gwas_gp <- function(init.proposal, generations, obj.fun, exclude.celltype = c("ERGpos_Tumor", "ERGneg_Tumor"), khan.method) {
