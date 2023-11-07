@@ -854,12 +854,15 @@ Genetic Programming
 ```{r}
 rm(list = ls(all.names = T)); gc()
 load("/drive-pool/data/peter_data/genetic_programming/code/brca/breast_sct_marker.list_pairwise.rda")
-load("/drive-pool/data/peter_data/genetic_programming/breast_nearbygenes_200kb_elmer_10xgenomic.rda") ## candidates near snps
+load("/drive-pool/data/peter_data/genetic_programming/breast_nearbygenes_200kb_notelmer_10xgenomic_with_LD.rda") ## candidates near snps
 nearbygenes <- nearbygenes_10xgenomics; rm(nearbygenes_10xgenomics)
 load("/drive-pool/data/peter_data/genetic_programming/code/brca/gwas_finemap.rda")  ## gwas catalog and finemap
 #load("/drive-pool/data/peter_data/genetic_programming/code/brca/breast_marker.list.rda") ## marker genes
 load("/drive-pool/data/peter_data/genetic_programming/code/brca/marker.list.bg.rda"); rm(marker.list); gc()
-load("/drive-pool/data/peter_data/genetic_programming/code/brca/promoter.df.rda")
+load("/drive-pool/data/peter_data/genetic_programming/code/brca/ld_promoter.df.rda")
+promoter.df <- promoter.df %>% mutate(locus = LEAD_SNP) %>%
+  dplyr::select(-LEAD_SNP) %>%
+  distinct()
 load("/drive-pool/data/peter_data/genetic_programming/code/brca/breast_cevm.rda")
 load("/drive-pool/data/peter_data/genetic_programming/code/brca/atac.marker.rda")
 atac.marker <- atac.marker %>% dplyr::rename("marker.atac"="atac")
@@ -986,7 +989,7 @@ multi_proposal <- mclapply(X = as.list(1:n_proposal), FUN = function(x) {
 multi_proposal <- as.data.frame(do.call(rbind, multi_proposal))
 #save(multi_proposal, file = "/drive-pool/data/peter_data/genetic_programming/code/brca/multi_proposal_071323.rda")
 ## Objective function
-obj.fun <- c("marker.gene", "magma", "hi.mut", "ppi", "marker.ppi", "inter.ppi", "intra.ppi", "lncrna.ppi", "promoter", "marker.atac", "common.atac") #, "cevm", , "multi.ppi", "findmarkers", "cevm", "go.cc.ppi"
+obj.fun <- c("marker.gene", "magma", "hi.mut", "ppi", "marker.ppi", "inter.ppi", "intra.ppi", "lncrna.ppi", "promoter") #, "cevm", , "multi.ppi", "findmarkers", "cevm", "go.cc.ppi" #, "marker.atac", "common.atac"
 
 
 gwas_gp <- function(init.proposal, generations, obj.fun, exclude.celltype = c("ERGpos_Tumor", "ERGneg_Tumor"), khan.method) {
@@ -1421,15 +1424,15 @@ gwas_gp <- function(init.proposal, generations, obj.fun, exclude.celltype = c("E
 } ## End of wrapper
 
 
-ga.run <- gwas_gp(init.proposal = multi_proposal, generations = 150, obj.fun = obj.fun, khan.method = TRUE)
+ga.run <- gwas_gp(init.proposal = multi_proposal, generations = 10, obj.fun = obj.fun, khan.method = TRUE)
 save(ga.run, file = "/drive-pool/data/peter_data/genetic_programming/code/brca/ga.run_breast.rda")
 
 date()
 multi.gp <- mclapply(X = as.list(1:3), FUN = function(x) {
-  gwas_gp(init.proposal = multi_proposal, generations = 150, obj.fun = obj.fun, khan.method = TRUE)
+  gwas_gp(init.proposal = multi_proposal, generations = 100, obj.fun = obj.fun, khan.method = TRUE)
   }, mc.cores = 3)
 date()
-save(multi.gp, file = "/drive-pool/data/peter_data/genetic_programming/code/brca/multi.run_090523.rda")
+save(multi.gp, file = "/drive-pool/data/peter_data/genetic_programming/code/brca/multi.run_110623.rda")
 
 ###################
 ## Post analysis ##
@@ -1549,11 +1552,11 @@ ggplot(result, aes(x = celltype, y = Freq.y)) + geom_beeswarm()
 #       }, mc.cores = 10)
 # ppi.top.proposal <- as.data.frame(do.call(rbind, ppi.top.proposal))
 
-fitness.allgen <- as.data.frame(do.call(rbind, test.run[1:150]))
+fitness.allgen <- as.data.frame(do.call(rbind, test.run[1:100]))
 
 gp.plotdata <- fitness.allgen %>% gather(data = ., key = "method", value = "fraction", -n, -gen)
 unique(gp.plotdata$method)
-gp.plotdata$method <- factor(gp.plotdata$method, levels = c("marker.gene", "magma", "cancer.gene", "ppi", "marker.ppi", "inter.ppi", "intra.ppi", "lncrna", "promoter", "marker.atac", "common.atac", "fitness"))
+gp.plotdata$method <- factor(gp.plotdata$method, levels = c("marker.gene", "magma", "cancer.gene", "ppi", "marker.ppi", "inter.ppi", "intra.ppi", "lncrna", "promoter", "fitness")) ## "marker.atac", "common.atac"
 
 ggplot(data = gp.plotdata, aes(x = gen, y = fraction)) +
   geom_point(alpha = 0.02, position = "jitter", pch = 16) +
@@ -1561,7 +1564,7 @@ ggplot(data = gp.plotdata, aes(x = gen, y = fraction)) +
   xlab("Generations") + ylab("Fraction of Hits") +
   facet_wrap(.~method, scale = "free") +
   ggtitle("Genetic Programming: Progressive Sampling Summary - Breast") +
-  scale_x_continuous(breaks = seq(0, 150, by = 25))
+  scale_x_continuous(breaks = seq(0, 100, by = 25))
 
 ggsave(filename = "~/brca_gp_progressive_summary_200kb_50gen_071223_updatedmarkers.png", width = 20, height = 7)
 
