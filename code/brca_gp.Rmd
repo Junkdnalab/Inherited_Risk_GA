@@ -1438,7 +1438,7 @@ multi.gp <- mclapply(X = as.list(1:3), FUN = function(x) {
   gwas_gp(init.proposal = multi_proposal, generations = 100, obj.fun = obj.fun, khan.method = TRUE)
   }, mc.cores = 3)
 date()
-save(multi.gp, file = "/drive-pool/data/peter_data/genetic_programming/code/brca/multi.run_110623.rda")
+save(multi.gp, file = "/drive-pool/data/peter_data/genetic_programming/code/brca/multi.run_110723.rda")
 
 ###################
 ## Post analysis ##
@@ -1487,82 +1487,11 @@ result <- merge(geneframe, cellframe, by = "locus") %>%
 
 #write.table(x = result, file = "~/summ.confidcall.txt", quote = FALSE, row.names = FALSE)
 
-confid.locus.plot <- ggplot(result, aes(x = locus, y = Freq.y)) +
-  geom_point() +
-  xlab("SNP") + ylab("Frequency") + 
-  theme_minimal() +
-  theme(axis.text.x = element_blank(),
-        axis.ticks.x = element_blank())
-confid.locus.plot
-
-confid.ct.plot <- ggplot(result, aes(x = celltype, y = Freq.y)) +
-  geom_point(position=position_dodge(width = .5)) +
-  xlab("Celltype") + ylab("Frequency") + 
-  theme_minimal() +
-  theme(axis.text.x = element_blank(),
-        axis.ticks.x = element_blank())
-confid.ct.plot
-
-## chi sq test with celltype confidence 
-top.proposal <- test.run[["top"]]
-expected.rate <- 100/length(celltype) / 100 ## Get proportion of celltype under null hypo (even distribution)
-expected <- data.frame(type = "expected",
-                       celltype = rep(x = celltype, times = expected.rate * 1000))
-n_proposal <- 1e3
-
-chi.sq.res <- as.data.frame(matrix(data = NA, nrow = length(locus), ncol = 2)) %>% 'colnames<-' (c("locus", "pval"))
-
-locus <- unique(top.proposal$locus)
-counter <- 1
-
-for(n in locus) {
-  spec.loci <- top.proposal[which(top.proposal$locus == n),] %>%
-    mutate(type = "observed") %>% dplyr::select(type, celltype)
-  ## Combine observe and expected loci
-  o.e.loci <- rbind(spec.loci, expected)
-  ## chi sq test
-  res <- chisq.test(table(o.e.loci$type, o.e.loci$celltype))
-  
-  chi.sq.res[counter, "locus"] <- n
-  chi.sq.res[counter, "pval"] <- res$p.value
-  ## Add to counter
-  counter <- counter + 1
-}
-
-chi.sq.res$adj.pval <- p.adjust(chi.sq.res$pval, "BH")
-chi.sq.res$log10adjp <- -log10(chi.sq.res$adj.pval)
-
-ggplot(data = chi.sq.res, aes(x = log10adjp)) +
-  geom_density()
-
-ggplot(result, aes(x = celltype, y = Freq.y)) + geom_beeswarm()
-# ngenesbyrsid <- as.data.frame(table(nearbygenes$snp))
-# 
-# gene.res <- result[,1:3] %>% left_join(x = ., y = ngenesbyrsid, by = c("locus"="Var1")) %>%
-#   left_join(x = ., y = nearbygenes, by = c("locus"="snp", "gene"="gene_name"))
-# 
-# 
-# ppi.top.proposal <- mclapply(X = as.list(unique(top.proposal$n)), FUN = function(x) {
-#         ## Get info on proposal
-#         proposal.set <- top.proposal %>% dplyr::filter(n == x) %>% dplyr::select(-n)
-#         ## Match proposal elements with ppi
-#         match.set <- ppi %>% left_join(x = ., y = proposal.set, by = c("gene1"="gene"),
-#                                        relationship = "many-to-many") %>%
-#           dplyr::rename("celltype1"="celltype", "locus1"="locus") %>%
-#           left_join(x = ., y = proposal.set, by = c("gene2"="gene"),
-#                     relationship = "many-to-many") %>%
-#           dplyr::rename("celltype2"="celltype", "locus2"="locus") %>% 
-#           na.omit() %>%
-#           mutate(n = x) 
-#       
-#       }, mc.cores = 10)
-# ppi.top.proposal <- as.data.frame(do.call(rbind, ppi.top.proposal))
-
 fitness.allgen <- as.data.frame(do.call(rbind, test.run[1:100]))
 
 gp.plotdata <- fitness.allgen %>% gather(data = ., key = "method", value = "fraction", -n, -gen)
 unique(gp.plotdata$method)
-gp.plotdata$method <- factor(gp.plotdata$method, levels = c("marker.gene", "magma", "cancer.gene", "ppi", "marker.ppi", "inter.ppi", "intra.ppi", "lncrna", "promoter", "fitness")) ## "marker.atac", "common.atac"
+gp.plotdata$method <- factor(gp.plotdata$method, levels = c("marker.gene", "magma", "cancer.gene", "ppi", "marker.ppi", "inter.ppi", "intra.ppi", "lncrna", "promoter", "marker.atac", "common.atac", "fitness")) 
 
 ggplot(data = gp.plotdata, aes(x = gen, y = fraction)) +
   geom_point(alpha = 0.02, position = "jitter", pch = 16) +
@@ -1607,36 +1536,40 @@ obj.fun ## This is the OF used in the GA run
 
 ## Function to get maximum hit INDEPENDENT of all other OF; data is nearbygene data
 ## Before running function. load all data required for GA run above.
-get.max.hit <- function(data) {
-  data <- data %>% dplyr::select(snp, gene_name)
+
+## Result is from using GA last gen proposals top calls for each 
+## Data must have locus, gene and celltype information
+data <- result[, c("locus", "gene", "celltype")] 
+
+get.hits <- function(data) { 
   if("marker.gene" %in% obj.fun) {
     ## Prepare marker df
     of1 <- combined.gene.marker %>% mutate(hit = 1) %>% dplyr::select(-celltype) %>% distinct()
-    d1 <- data %>% left_join(x = ., y = of1, by = c("gene_name"="gene")) %>%
+    d1 <- data %>% left_join(x = ., y = of1, by = "gene") %>%
       mutate(hit = replace_na(hit, 0)) %>%
-      dplyr::group_by(snp) %>%
-      dplyr::summarise(hit = sum(hit)) %>%
-      mutate(hit = case_when(hit > 0 ~ 1,
-                             hit == 0 ~ 0))
-    d1 <- sum(d1$hit)/nrow(d1)
+      dplyr::group_by(locus) %>%
+      dplyr::summarise(marker.gene = sum(hit)) %>%
+      mutate(marker.gene = case_when(marker.gene > 0 ~ 1,
+                                     marker.gene == 0 ~ 0))
   }
   if("magma" %in% obj.fun) {
-    d2 <- data %>% left_join(x = ., y = magma, by = c("gene_name"="gene")) %>%
+    d2 <- data %>% left_join(x = ., y = magma, by = "gene") %>%
       mutate(magma = replace_na(magma, 0)) %>%
-      dplyr::group_by(snp) %>%
+      dplyr::group_by(locus) %>%
       dplyr::summarise(magma = sum(magma)) %>%
       mutate(magma = case_when(magma > 0 ~ 1,
                                magma == 0 ~ 0))
-    d2 <- sum(d2$magma)/nrow(d2)
   }
   if("hi.mut" %in% obj.fun) {
-    d3 <- data %>% left_join(x = ., y = breast.cancer.gene, by = c("gene_name"="gene")) %>%
+    d3 <- data %>% left_join(x = ., y = breast.cancer.gene, by = "gene") %>%
       mutate(cancer.gene = replace_na(cancer.gene, 0)) %>%
-      dplyr::group_by(snp) %>%
+      dplyr::group_by(locus) %>%
       dplyr::summarise(cancer.gene = sum(cancer.gene)) %>%
       mutate(cancer.gene = case_when(cancer.gene > 0 ~ 1,
                                      cancer.gene == 0 ~ 0))
-    d3 <- sum(d3$cancer.gene)/nrow(d3)
+  }
+  if("ppi" %in% obj.fun) {
+    
   }
   
 }
