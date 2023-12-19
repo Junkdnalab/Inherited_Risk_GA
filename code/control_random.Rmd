@@ -1398,7 +1398,9 @@ multi.gp <- mclapply(X = as.list(1:3), FUN = function(x) {
 date()
 save(multi.gp, file = "/drive-pool/data/peter_data/genetic_programming/code/brca/ctrl_ld_multi.run_121323.rda")
 
+load("/drive-pool/data/peter_data/genetic_programming/code/brca/ctrl_ld_multi.run_121323.rda")
 test.run <- multi.gp[[3]]
+top.proposal <- test.run[["proposal"]]
 
 genes <- subset(top.proposal, select = c(locus, gene))
 geneframe <- data.frame(locus=character(length(loci)), gene = character(length(loci)), Freq = integer(length(loci)))
@@ -1432,5 +1434,138 @@ for (i in unique(cells$locus)) {
 
 result <- merge(geneframe, cellframe, by = "locus") %>%
   left_join(x = ., y = distinct(nearbygenes[, c("gene_name", "gene_type")]), by = c("gene"="gene_name"))
+
+## OF Scores
+fitness.allgen <- as.data.frame(do.call(rbind, test.run[1:100]))
+
+gp.plotdata <- fitness.allgen %>% gather(data = ., key = "method", value = "fraction", -n, -gen)
+unique(gp.plotdata$method)
+gp.plotdata$method <- factor(gp.plotdata$method, levels = c("marker.gene", "magma", "cancer.gene", "ppi", "marker.ppi", "inter.ppi", "intra.ppi", "lncrna", "promoter", "marker.atac", "common.atac", "fitness")) 
+
+ggplot(data = gp.plotdata, aes(x = gen, y = fraction)) +
+  geom_point(alpha = 0.02, position = "jitter", pch = 16) +
+  theme_minimal() +
+  xlab("Generations") + ylab("Fraction of Hits") +
+  facet_wrap(.~method, scale = "free") +
+  ggtitle("Genetic Programming: Progressive Sampling Summary - Control") +
+  scale_x_continuous(breaks = seq(0, 100, by = 25))
+```
+
+Compare results from BRCA, Alzheimer and matched controls
+```{r}
+rm(list = ls(all.names = T)); gc()
+
+####################
+## Load ctrl data ##
+load("/drive-pool/data/peter_data/genetic_programming/code/brca/ctrl_ld_multi.run_121323.rda")
+ctrl_data <- multi.gp[[2]]; rm(multi.gp)
+ctrl_data <- as.data.frame(do.call(rbind, ctrl_data[1:100])) %>%
+  dplyr::select(n, gen, fitness)
+
+## Avg fitness per gen
+ctrl_fitness <- ctrl_data %>% dplyr::group_by(gen) %>% dplyr::summarise(avg = mean(fitness)) %>%
+  mutate(type = "control")
+
+###################
+## Load alz data ##
+load("/drive-pool/data/peter_data/genetic_programming/code/brca/alz_ld_multi.run_120623.rda")
+alz_data <- multi.gp[[1]]; rm(multi.gp)
+alz_data <- as.data.frame(do.call(rbind, alz_data[1:100])) %>%
+  dplyr::select(n, gen, fitness)
+
+## Avg fitness per gen
+alz_fitness <- alz_data %>% dplyr::group_by(gen) %>% dplyr::summarise(avg = mean(fitness)) %>%
+  mutate(type = "alzheimer")
+
+######################
+## Load breast data ##
+load("/drive-pool/data/peter_data/genetic_programming/code/brca/multi.run_110723.rda")
+b_data <- multi.gp[[1]]; rm(multi.gp)
+b_data <- as.data.frame(do.call(rbind, b_data[1:100])) %>%
+  dplyr::select(n, gen, fitness)
+
+## Avg fitness per gen
+b_fitness <- b_data %>% dplyr::group_by(gen) %>% dplyr::summarise(avg = mean(fitness)) %>%
+  mutate(type = "breast")
+
+
+
+fitness.res <- rbind(ctrl_fitness, alz_fitness, b_fitness)
+
+## fitness diff
+fitness.diff <- alz_data %>% dplyr::select(gen, fitness) %>% dplyr::rename("alzheimer"="fitness") %>%
+  mutate(breast = b_data$fitness,
+         control = ctrl_data$fitness)
+fitness.diff$diff_bva <- fitness.diff$breast - fitness.diff$alzheimer
+fitness.diff$diff_bvc <- fitness.diff$breast - fitness.diff$control
+
+## Convert difference into density so we can see where it all stacks.
+library(MASS)
+library(viridis)
+#> Loading required package: viridisLite
+theme_set(theme_bw(base_size = 16))
+
+# Get density of points in 2 dimensions.
+# @param x A numeric vector.
+# @param y A numeric vector.
+# @param n Create a square n by n grid to compute density.
+# @return The density within each square.
+get_density <- function(x, y, ...) {
+  dens <- MASS::kde2d(x, y, ...)
+  ix <- findInterval(x, dens$x)
+  iy <- findInterval(y, dens$y)
+  ii <- cbind(ix, iy)
+  return(dens$z[ii])
+}
+
+fitness.diff$bva_density <- get_density(fitness.diff$gen, fitness.diff$diff_bva, n = 100)
+fitness.diff$bvc_density <- get_density(fitness.diff$gen, fitness.diff$diff_bvc, n = 100)
+
+## Generate last gen
+c_lastgen <- ctrl_data %>% dplyr::filter(gen == 99) %>% mutate(type = "control")
+b_lastgen <- b_data %>% dplyr::filter(gen == 99) %>% mutate(type = "breast")
+a_lastgen <- alz_data %>% dplyr::filter(gen == 99) %>% mutate(type = "alzheimer")
+
+lastgen <- rbind(c_lastgen, b_lastgen, a_lastgen)
+
+## Plot data
+load("/drive-pool/data/peter_data/genetic_programming/kelly.colours.rda")
+
+p1 <- ggplot(fitness.res, aes(x = gen, y = avg, colour = type)) +
+  geom_line() +
+  ylab("Average Fitness") + xlab("Generation") + labs(colour = "") +
+  ggtitle("Fitness Comparison - Breast vs Alzheimer's using Breast GA") +
+  scale_color_manual(values = kelly.colours[3:5]) +
+  theme_bw() +
+  theme(legend.position = c(.92,.22),
+        legend.background = element_rect(fill = "transparent", colour = "transparent"))
+p2 <- ggplot(fitness.diff, aes(x = gen, y = diff_bva, colour = bva_density)) +
+  geom_point(alpha = 0.25) + 
+  scale_color_viridis() +
+  xlab("Generation") + ylab("Difference of Fitness") + labs(colour = "Density") +
+  ylim(0,0.18) +
+  ggtitle("Breast vs Alzheimer's Disease") +
+  theme_bw() 
+
+p3 <- ggplot(fitness.diff, aes(x = gen, y = diff_bvc, colour = bvc_density)) +
+  geom_point(alpha = 0.25) + 
+  scale_color_viridis() +
+  xlab("Generation") + ylab("Difference of Fitness") + labs(colour = "Density") +
+  ylim(0,0.18) +
+  ggtitle("Breast vs Control") +
+  theme_bw() 
+
+library(ggridges)
+p4 <- ggplot(lastgen, aes(x = fitness, y = type, fill = type)) + geom_density_ridges() +
+  xlab("Fitness Score") + ylab("") + guides(fill = FALSE) +
+  scale_fill_manual(values = kelly.colours[3:5]) +
+  ggtitle("Distribution of Fitness Scoress - Generation 100") +
+  theme_bw()
+
+library(patchwork)
+layout <- "A\nA\nB\nC\nD\nD"
+dev.off()
+combined.plot <- p1 + p2 + p3 + p4 + plot_layout(design = layout)
+ggsave(filename = "/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/figure/breast_alz_ctrl_fitness_compare.png", width = 12, height = 12)
 ```
 
