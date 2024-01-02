@@ -884,7 +884,7 @@ ppi <- str.db.link %>% dplyr::select(gene1, gene2) %>%
   group_by(grp = paste(pmax(gene1, gene2), pmin(gene1, gene2), sep = "_")) %>%
   dplyr::filter(row_number() == 1) %>%
   ungroup() %>%
-  select(-grp) %>%
+  dplyr::select(-grp) %>%
   distinct(); rm(str.db.info, map.genes, str.db.link); gc()
 
 
@@ -901,7 +901,7 @@ intra.ppi.gene <- ppi %>%
   dplyr::filter(!grp %in% celltalk_gene$grp) %>%
   dplyr::filter(row_number() == 1) %>%
   ungroup() %>%
-  select(-grp) %>%
+  dplyr::select(-grp) %>%
   distinct()
 
 ######################
@@ -924,7 +924,7 @@ rna.protein.map <- rna.protein.map %>% 'colnames<-' (c("gene1", "gene2")) %>%
   group_by(grp = paste(pmax(gene1, gene2), pmin(gene1, gene2), sep = "_")) %>%
   dplyr::filter(row_number() == 1) %>%
   ungroup() %>%
-  select(-grp) %>%
+  dplyr::select(-grp) %>%
   distinct()
 
 
@@ -938,6 +938,9 @@ multi_proposal <- mclapply(X = as.list(1:n_proposal), FUN = function(x) {
 
 multi_proposal <- as.data.frame(do.call(rbind, multi_proposal))
 #save(multi_proposal, file = "/drive-pool/data/peter_data/genetic_programming/code/brca/multi_proposal_071323.rda")
+# save(atac.marker, breast.cancer.gene, celltalk_gene, celltalkdb, cevm.genes, combined.gene.marker, common.atac.hit, intra.ppi.gene,
+#      magma, marker.hits, ppi, promoter.df, rna.protein.map, 
+#      file = "/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/ctrl.gp.prereq.rda")
 ## Objective function
 obj.fun <- c("marker.gene", "magma", "hi.mut", "ppi", "marker.ppi", "inter.ppi", "intra.ppi", "lncrna.ppi", "promoter","marker.atac", "common.atac") #, "cevm", , "multi.ppi", "findmarkers", "cevm", "go.cc.ppi" #, 
 
@@ -1399,9 +1402,9 @@ date()
 save(multi.gp, file = "/drive-pool/data/peter_data/genetic_programming/code/brca/ctrl_ld_multi.run_121323.rda")
 
 load("/drive-pool/data/peter_data/genetic_programming/code/brca/ctrl_ld_multi.run_121323.rda")
-test.run <- multi.gp[[3]]
+test.run <- multi.gp[[2]]
 top.proposal <- test.run[["proposal"]]
-
+loci <- 174
 genes <- subset(top.proposal, select = c(locus, gene))
 geneframe <- data.frame(locus=character(length(loci)), gene = character(length(loci)), Freq = integer(length(loci)))
 j <- 1
@@ -1567,5 +1570,372 @@ layout <- "A\nA\nB\nC\nD\nD"
 dev.off()
 combined.plot <- p1 + p2 + p3 + p4 + plot_layout(design = layout)
 ggsave(filename = "/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/figure/breast_alz_ctrl_fitness_compare.png", width = 12, height = 12)
+```
+
+## Get OF hits 
+```{r}
+rm(list = ls(all.names = T)); gc()
+## Load prereq data
+load("/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/ctrl.gp.prereq.rda")
+
+## Load final res
+load("/drive-pool/data/peter_data/genetic_programming/ctrl_nearbygenes_200kb_notelmer_10xgenomic_with_LD.rda") ## candidates near snps
+nearbygenes <- nearbygenes_10xgenomics; rm(nearbygenes_10xgenomics)
+load("/drive-pool/data/peter_data/genetic_programming/code/brca/ctrl_ld_multi.run_121323.rda")
+test.run <- multi.gp[[2]]
+top.proposal <- test.run[["proposal"]]
+loci <- 174
+genes <- subset(top.proposal, select = c(locus, gene))
+geneframe <- data.frame(locus=character(length(loci)), gene = character(length(loci)), Freq = integer(length(loci)))
+j <- 1
+for (i in unique(genes$locus)) {
+  genetab <- as.data.frame(table(subset(genes, locus==i)))
+  topgene <- which(genetab$Freq == max(genetab$Freq))
+  if(length(topgene)>1) {
+    topgene <- which(genetab$Freq == max(genetab$Freq)) %>% .[1]
+  }
+  geneframe[j,1] <- as.character(genetab[topgene,1])
+  geneframe[j,2] <- as.character(genetab[topgene,2])
+  geneframe[j,3] <- genetab[topgene,3]
+  j <- j+1
+}
+
+cells <- subset(top.proposal, select = c(locus, celltype))
+cellframe <- data.frame(locus=character(length(loci)), celltype = character(length(loci)), Freq = integer(length(loci)))
+j <- 1
+for (i in unique(cells$locus)) {
+  celltab <- as.data.frame(table(subset(cells, locus == i)))
+  topcell <- which(celltab$Freq == max(celltab$Freq))
+  if(length(topcell)>1) {
+    topcell <- which(celltab$Freq == max(celltab$Freq)) %>% .[1]
+  }
+  cellframe[j,1] <- as.character(celltab[topcell,1])
+  cellframe[j,2] <- as.character(celltab[topcell,2])
+  cellframe[j,3] <- celltab[topcell,3]
+  j <- j+1
+}
+
+result <- merge(geneframe, cellframe, by = "locus") %>%
+  left_join(x = ., y = distinct(nearbygenes[, c("gene_name", "gene_type")]), by = c("gene"="gene_name"))
+
+## What objective function are we interested in?
+obj.fun <- c("marker.gene", "magma", "hi.mut", "ppi", "marker.ppi", "inter.ppi", "intra.ppi", "lncrna.ppi", "promoter","marker.atac", "common.atac")
+
+
+data <- result %>% dplyr::select(locus, gene, celltype)
+get.of.hits <- function(data, obj.fun) { ## Data is df of locus, gene and cell type; obj.fun is a vector of OF to use
+  obj.fun.hit <- list()
+  ########################################
+  ## Combined gene marker - CEVM and FM ##
+  if("marker.gene" %in% obj.fun) {
+    marker.gene <- combined.gene.marker %>% mutate(marker.gene = 1)
+      
+    marker.gene.obj <- data %>% left_join(x = ., y = marker.gene, by = c("gene", "celltype")) %>%
+      mutate(marker.gene = replace_na(marker.gene, replace = 0))
+    obj.fun.hit[["marker.gene"]] <- as.data.frame(marker.gene.obj)
+    } ## End of combined gene marker
+  
+  ###########
+  ## Magma ##
+  if("magma" %in% obj.fun) {
+  magma.obj <- data %>% left_join(x = ., y = magma, by = "gene") %>%
+    mutate(magma = replace_na(magma, replace = 0))
+  obj.fun.hit[["magma"]] <- as.data.frame(magma.obj)
+  } ## End of magma
+
+  ##########################
+  ## Highly mutated genes ##
+  if("hi.mut" %in% obj.fun) {
+    hi.mut.obj <- data %>% left_join(x = ., y = breast.cancer.gene, by = "gene") %>%
+      mutate(cancer.gene = replace_na(cancer.gene, replace = 0))
+    obj.fun.hit[["hi.mut"]] <- as.data.frame(hi.mut.obj)
+  } ## End of hi mut
+  
+  ############################
+  ## PPI Objective Function ##
+  if(any(c("ppi", "intra.ppi", "inter.ppi", "marker.ppi", "go.cc.ppi") %in% obj.fun)) {
+    match.set <- ppi %>% left_join(x = ., y = data, by = c("gene1"="gene"),
+                                   relationship = "many-to-many") %>%
+      dplyr::rename("celltype1"="celltype", "locus1"="locus") %>%
+      left_join(x = ., y = data, by = c("gene2"="gene"),
+                relationship = "many-to-many") %>%
+      dplyr::rename("celltype2"="celltype", "locus2"="locus") %>%
+      na.omit()
+    if("intra.ppi" %in% obj.fun) {
+       intra.df <-  match.set %>% mutate(intra.commun = case_when(celltype1 == celltype2 ~ 1,
+                                                                  celltype1 != celltype2 ~ 0)) %>%
+          ## Label each cases as 1 or 0 for having same celltype or not, then filter for 1.
+          dplyr:::filter(intra.commun == 1) %>%
+          group_by(grp = paste(pmax(gene1, gene2), ## Keep only intra combo (no celltalk combo)
+                               pmin(gene1, gene2), sep = "_")) %>%
+          dplyr::filter(!grp %in% celltalk_gene$grp) %>%
+          ungroup() %>%
+          dplyr::select(-grp) %>%
+          distinct()
+       if(nrow(intra.df) > 0) {
+            intra.df <- data.frame(gene = unique(c(intra.df$gene1, intra.df$gene2)),
+                                          intra.ppi = 1)
+            ##
+            intra.res <- data %>% left_join(x = ., y = intra.df, by = "gene") %>%
+              mutate(intra.ppi = replace_na(intra.ppi, replace = 0))
+          } else {
+            intra.res <- data %>% mutate(intra.ppi = 0)
+          }
+       obj.fun.hit[["intra.ppi"]] <- as.data.frame(intra.res)
+    } ## End of intra.ppi
+    
+    ##############
+    ## PPI Only ##
+    if("ppi" %in% obj.fun) {
+      ppi.genes <- data.frame(gene = unique(c(match.set$gene1, match.set$gene2)),
+                                  ppi = 1)
+      ppi.res <- data %>% left_join(x = ., y = ppi.genes, by = "gene") %>%
+        mutate(ppi = replace_na(ppi, replace = 0))
+      obj.fun.hit[["ppi"]] <- as.data.frame(ppi.res)
+    } ## End of PPI 
+    
+    #####################
+    ## marker ppi only ##
+    if("marker.ppi" %in% obj.fun) {
+      all.markers <- combined.gene.marker %>% mutate(marker.gene = 1) %>% distinct()
+      
+      marker.obj <- match.set %>% left_join(x = ., y = all.markers, by = c("gene1"="gene", "celltype1"="celltype")) %>%
+          left_join(x = ., y = all.markers, by = c("gene2"="gene", "celltype2"="celltype")) %>%
+          na.omit()
+      
+      if(nrow(marker.obj) == 0) {
+          marker.ppi.obj <- data %>% mutate(marker.ppi = 0)
+      } else {
+        df1 <- marker.obj %>% dplyr::select(gene1, celltype1) %>% 'colnames<-' (c("gene", "celltype")) %>% distinct()
+        df2 <- marker.obj %>% dplyr::select(gene2, celltype2) %>% 'colnames<-' (c("gene", "celltype")) %>% distinct()
+        marker.ppi.set <- rbind(df1, df2) %>% mutate(marker.ppi = 1) %>% distinct()
+        
+        marker.res <- data %>% left_join(x = ., y = marker.ppi.set, by = c("gene", "celltype")) %>%
+                mutate(marker.ppi = replace_na(marker.ppi, replace = 0))
+      }
+      obj.fun.hit[["marker.ppi"]] <- as.data.frame(marker.res)
+    } ## End of marker ppi
+    
+    ###############
+    ## Inter ppi ##
+    if("inter.ppi" %in% obj.fun) {
+      all.markers <- combined.gene.marker %>% mutate(marker.gene = 1) %>% distinct()
+      marker.obj <- match.set %>% left_join(x = ., y = all.markers, by = c("gene1"="gene", "celltype1"="celltype")) %>%
+        left_join(x = ., y = all.markers, by = c("gene2"="gene", "celltype2"="celltype")) %>%
+        na.omit() %>% ## Keep positive hits.
+        dplyr::select(-marker.gene.x, -marker.gene.y) ## Get rid of columns no longer needed
+      if(nrow(marker.obj) == 0) {
+          inter.ppi.obj <- data %>% mutate(inter.ppi = 0)
+      } else {
+        inter.obj <- marker.obj %>% left_join(x = ., 
+                                                y = celltalkdb[,c("source_genesymbol", "inter.ppi")], 
+                                                by = c("gene1"="source_genesymbol"),
+                                                relationship = "many-to-many") %>%
+            distinct() %>%
+            dplyr::rename("source_gene1" = "inter.ppi") %>%
+            left_join(x = ., 
+                      y = celltalkdb[,c("source_genesymbol", "inter.ppi")],
+                      by = c("gene2"="source_genesymbol"),
+                      relationship = "many-to-many") %>%
+            distinct() %>% 
+            dplyr::rename("source_gene2" = "inter.ppi") %>%
+            .[which(rowSums(.[,c("source_gene1", "source_gene2")], na.rm = TRUE) == 1),] %>%
+          
+            ## Now trying to find targets the same way we did for source genes
+            left_join(x = ., 
+                      y = celltalkdb[,c("target_genesymbol", "inter.ppi")],
+                      by = c("gene1"="target_genesymbol"),
+                      relationship = "many-to-many") %>%
+            distinct() %>%
+            dplyr::rename("target_gene1" = "inter.ppi") %>%
+            left_join(x = ., 
+                      y = celltalkdb[,c("target_genesymbol", "inter.ppi")],
+                      by = c("gene2"="target_genesymbol"),
+                      relationship = "many-to-many") %>%
+            distinct() %>%
+            dplyr::rename("target_gene2" = "inter.ppi") %>%
+            .[which(rowSums(.[,c("target_gene1", "target_gene2")], na.rm = TRUE) == 1),] %>%
+            ## Removing target and source identity column
+            dplyr::select(-source_gene1, -source_gene2, -target_gene1, -target_gene2)
+        if(nrow(inter.obj) == 0) {
+          inter.ppi.obj <- data %>% mutate(inter.ppi = 0)
+        } else {
+          df1 <- inter.obj %>% dplyr::select(gene1, celltype1) %>% 'colnames<-' (c("gene", "celltype")) %>% distinct()
+          df2 <- inter.obj %>% dplyr::select(gene2, celltype2) %>% 'colnames<-' (c("gene", "celltype")) %>% distinct()
+          inter.ppi.set <- rbind(df1, df2) %>% mutate(inter.ppi = 1) %>% distinct()
+          
+          inter.ppi.obj <- data %>% left_join(x = ., y = inter.ppi.set, by = c("gene", "celltype")) %>%
+              mutate(inter.ppi = replace_na(inter.ppi, replace = 0))
+        }
+      }
+      obj.fun.hit[["inter.ppi"]] <- as.data.frame(inter.ppi.obj)
+    } ## End of inter.ppi
+  } ## End of all PPI function
+  
+  #################################
+  ## Promoter Objective Function ##
+  if("promoter" %in% obj.fun) {
+    promoter.obj <- data %>% left_join(x = ., y = promoter.df, by = c("locus", "gene")) %>%
+      mutate(promoter = replace_na(promoter, replace = 0)) 
+      
+      obj.fun.hit[["promoter"]] <- promoter.obj
+    } ## End of promoter
+  
+  #############################
+  ## ATAC Objective Function ##
+  ## Marker atac peak 
+  if("marker.atac" %in% obj.fun) {
+    m.atac.obj <- data %>% left_join(x = ., y = atac.marker, by = c("locus", "celltype")) %>%
+      mutate(marker.atac = replace_na(marker.atac, replace = 0))
+    
+    obj.fun.hit[["marker.atac"]] <- m.atac.obj
+  } ## End of marker atac
+  ## Common atac peak
+    if("common.atac" %in% obj.fun) {
+      c.atac.obj <- data %>% left_join(x = ., y = common.atac.hit, by = c("locus", "celltype")) %>%
+        mutate(common.atac = replace_na(common.atac, replace = 0)) 
+      obj.fun.hit[["common.atac"]] <- c.atac.obj
+    } ## End of common atac
+  
+  ########################
+  ## lncrna interaction ##
+  if("lncrna.ppi" %in% obj.fun) {
+    ## Match proposal elements with ppi
+    match.set <- rna.protein.map %>% left_join(x = ., y = data, by = c("gene1"="gene"),
+                                       relationship = "many-to-many") %>%
+          dplyr::rename("celltype1"="celltype", "locus1"="locus") %>%
+          left_join(x = ., y = data, by = c("gene2"="gene"),
+                    relationship = "many-to-many") %>%
+          dplyr::rename("celltype2"="celltype", "locus2"="locus") %>% 
+          na.omit()
+      
+    lncrna.genes <- data.frame(gene = unique(c(match.set$gene1, match.set$gene2)),
+                                lncrna = 1)
+    lncrna.res <- data %>% left_join(x = ., y = lncrna.genes, by = "gene") %>%
+          mutate(lncrna = replace_na(lncrna, replace = 0))
+      
+    obj.fun.hit[["lncrna.ppi"]] <- lncrna.res
+    } ## end of lncrna
+  
+  ## Combine the obj.fun.hit together 
+  for(n in 1:length(obj.fun)) {
+    if(n == 1) {
+      obj.hits <- obj.fun.hit[[obj.fun[n]]]
+      } else {
+        add_test <- obj.fun.hit[[obj.fun[n]]]
+        obj.hits <- left_join(x = obj.hits, y = add_test, by = c("locus", "gene", "celltype"))
+      }
+  }
+  
+  ## Return final res
+  return(obj.hits)
+} ## End of function
+
+c_res <- get.of.hits(data = data, obj.fun = obj.fun)      
+#save(c_res, file = "/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/c_res.rda")
+    
+```
+
+BRCA OF hits
+```{r}
+rm(list = ls(all.names = T)); gc()
+## Make sure to run the get.of.hits function in the previous chunk
+load("/drive-pool/data/peter_data/genetic_programming/breast_nearbygenes_200kb_notelmer_10xgenomic_with_LD.rda") ## candidates near snps
+nearbygenes <- nearbygenes_10xgenomics; rm(nearbygenes_10xgenomics)
+
+load("/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/brca.gp.prereq.rda")
+
+load("/drive-pool/data/peter_data/genetic_programming/code/brca/multi.run_110723.rda")
+test.run <- multi.gp[[1]]
+top.proposal <- test.run[["proposal"]]
+loci <- 206
+genes <- subset(top.proposal, select = c(locus, gene))
+geneframe <- data.frame(locus=character(length(loci)), gene = character(length(loci)), Freq = integer(length(loci)))
+j <- 1
+for (i in unique(genes$locus)) {
+  genetab <- as.data.frame(table(subset(genes, locus==i)))
+  topgene <- which(genetab$Freq == max(genetab$Freq))
+  if(length(topgene)>1) {
+    topgene <- which(genetab$Freq == max(genetab$Freq)) %>% .[1]
+  }
+  geneframe[j,1] <- as.character(genetab[topgene,1])
+  geneframe[j,2] <- as.character(genetab[topgene,2])
+  geneframe[j,3] <- genetab[topgene,3]
+  j <- j+1
+}
+
+cells <- subset(top.proposal, select = c(locus, celltype))
+cellframe <- data.frame(locus=character(length(loci)), celltype = character(length(loci)), Freq = integer(length(loci)))
+j <- 1
+for (i in unique(cells$locus)) {
+  celltab <- as.data.frame(table(subset(cells, locus == i)))
+  topcell <- which(celltab$Freq == max(celltab$Freq))
+  if(length(topcell)>1) {
+    topcell <- which(celltab$Freq == max(celltab$Freq)) %>% .[1]
+  }
+  cellframe[j,1] <- as.character(celltab[topcell,1])
+  cellframe[j,2] <- as.character(celltab[topcell,2])
+  cellframe[j,3] <- celltab[topcell,3]
+  j <- j+1
+}
+
+result <- merge(geneframe, cellframe, by = "locus") %>%
+  left_join(x = ., y = distinct(nearbygenes[, c("gene_name", "gene_type")]), by = c("gene"="gene_name"))
+
+## What objective function are we interested in?
+obj.fun <- c("marker.gene", "magma", "hi.mut", "ppi", "marker.ppi", "inter.ppi", "intra.ppi", "lncrna.ppi", "promoter","marker.atac", "common.atac")
+
+data <- result %>% dplyr::select(locus, gene, celltype)
+## Pretty much run the same chucks but with breast data from brca_gp.Rmd
+
+b_res <- get.of.hits(data = data, obj.fun = obj.fun)      
+#save(b_res, file = "/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/b_res.rda")
+
+```
+
+Run Chi-square on control and brca result
+```{r}
+rm(list = ls(all.names = T)); gc()
+
+## Load breast and control result
+load("/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/b_res.rda")
+load("/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/c_res.rda")
+
+b_data <- b_res %>% dplyr::select(-locus, -gene, -celltype) %>% 
+  colSums() %>% as.data.frame() %>%
+  dplyr::rename("hits" = ".") %>%
+  mutate(no_hits = nrow(b_res) - hits,
+         type = "breast")
+
+c_data <- c_res %>% dplyr::select(-locus, -gene, -celltype) %>% 
+  colSums() %>% as.data.frame() %>%
+  dplyr::rename("hits" = ".") %>%
+  mutate(no_hits = nrow(c_res) - hits,
+         type = "control")
+
+## Check whether observed vs expected is statistically significantly diff
+
+of.chisq.res <- list()
+
+for(n in rownames(b_data)) {
+  breast <- as.numeric(b_data[which(rownames(b_data) == n), c(1:2)])
+  ctrl <- as.numeric(c_data[which(rownames(c_data) == n), c(1:2)])
+  
+  chi.res <- chisq.test(data.frame(breast,ctrl))
+  
+  res <- data.frame(obj.fun = n,
+                    obs.hits = breast[1],
+                    obs.nohits  = breast[2],
+                    exp.hits = ctrl[1],
+                    exp.nohits = ctrl[2],
+                    pval = chi.res$p.value)
+  
+  of.chisq.res[[n]] <- res
+}
+
+of.chisq.res <- as.data.frame(do.call(rbind, of.chisq.res))
+of.chisq.res$padj <- p.adjust(of.chisq.res$pval, "BH") ## multiple hypothesis correction
+of.chisq.res$signif <- case_when(of.chisq.res$padj >= 0.05 ~ 0, ## Convert padj to boolean value. FDR is set to 0.05
+                                 of.chisq.res$padj < 0.05 ~ 1)
 ```
 
