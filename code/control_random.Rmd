@@ -639,7 +639,7 @@ save(nearbygenes_10xgenomics, file = "/drive-pool/data/peter_data/genetic_progra
 
 Generate obj function for control match
 ```{r}
-load("/drive-pool/data/peter_data/genetic_programming/alz_nearbygenes_200kb_notelmer_10xgenomic_with_LD.rda")
+load("/drive-pool/data/peter_data/genetic_programming/ctrl_nearbygenes_200kb_notelmer_10xgenomic_with_LD.rda")
 nearbygenes <- nearbygenes_10xgenomics; rm(nearbygenes_10xgenomics); gc()
 
 #######################################################
