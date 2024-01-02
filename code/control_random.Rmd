@@ -1939,3 +1939,70 @@ of.chisq.res$signif <- case_when(of.chisq.res$padj >= 0.05 ~ 0, ## Convert padj 
                                  of.chisq.res$padj < 0.05 ~ 1)
 ```
 
+Run Chi-square on control and brca result
+```{r}
+rm(list = ls(all.names = T)); gc()
+
+## Load breast and control result
+load("/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/b_res.rda")
+load("/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/c_res.rda")
+
+b_data <- b_res %>% dplyr::select(-locus, -gene, -celltype) %>% 
+  colSums() %>% as.data.frame() %>%
+  dplyr::rename("hits" = ".") %>%
+  mutate(no_hits = nrow(b_res) - hits,
+         type = "breast")
+
+c_data <- c_res %>% dplyr::select(-locus, -gene, -celltype) %>% 
+  colSums() %>% as.data.frame() %>%
+  dplyr::rename("hits" = ".") %>%
+  mutate(no_hits = nrow(c_res) - hits,
+         type = "control")
+
+rm(c_res, b_res); gc()
+
+## Check whether observed vs expected is statistically significantly diff
+
+of_beta_res <- list() ## store results from beta distribution
+CI <- 0.025 ## confidence interval
+n.sim <- 1e5
+
+for(n in rownames(b_data)) {
+  ## Get res from individual obj function
+  breast <- as.numeric(b_data[which(rownames(b_data) == n), c(1:2)])
+  ctrl <- as.numeric(c_data[which(rownames(c_data) == n), c(1:2)])
+  
+  fg_rbeta <- rbeta(n = n.sim, shape1 = breast[1], shape2 = breast[2])
+  bg_rbeta <- rbeta(n = n.sim, shape1 = ctrl[1], shape2 = ctrl[2])
+  
+  beta.res <- fg_rbeta - bg_rbeta
+  
+  
+  quant_diff <- quantile(beta.res, c(CI, 0.5, 1-CI))
+  pval <- sum(beta.res < 0)/1e5 ## How many times is the fg less than the bg? divided by n in rbeta
+  
+  res <- data.frame(obj.fun = n,
+                    breast.hits = breast[1],
+                    breast.nohits  = breast[2],
+                    ctrl.hits = ctrl[1],
+                    ctrl.nohits = ctrl[2],
+                    lower.ci = round(quant_diff[1], 3),
+                    median = round(quant_diff[2], 3),
+                    upper.ci = round(quant_diff[3], 3),
+                    n = n.sim,
+                    fglessbg = sum(beta.res < 0),
+                    pval = pval)
+  
+  of_beta_res[[n]] <- res
+  
+}
+
+of_beta_res <- as.data.frame(do.call(rbind, of_beta_res))
+of_beta_res$padj <- p.adjust(of_beta_res$pval, "BH") ## multiple hypothesis correction
+of_beta_res$signif <- case_when(of_beta_res$padj >= 0.05 ~ 0, ## Convert padj to boolean value. FDR is set to 0.05
+                                of_beta_res$padj < 0.05 ~ 1)
+of_beta_res$cross.zero <- case_when(of_beta_res$lower.ci <= 0 ~ 1,
+                                    of_beta_res$lower.ci > 0 ~ 0)
+rownames(of_beta_res) <- NULL
+of_beta_res
+```
