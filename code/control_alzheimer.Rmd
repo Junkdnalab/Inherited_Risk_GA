@@ -551,6 +551,9 @@ multi_proposal <- mclapply(X = as.list(1:n_proposal), FUN = function(x) {
 
 multi_proposal <- as.data.frame(do.call(rbind, multi_proposal))
 #save(multi_proposal, file = "/drive-pool/data/peter_data/genetic_programming/code/brca/multi_proposal_071323.rda")
+# save(atac.marker, breast.cancer.gene, celltalk_gene, celltalkdb, cevm.genes, combined.gene.marker, common.atac.hit, intra.ppi.gene,
+#      magma, marker.hits, ppi, promoter.df, rna.protein.map,
+#      file = "/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/alz.gp.prereq.rda")
 ## Objective function
 obj.fun <- c("marker.gene", "magma", "hi.mut", "ppi", "marker.ppi", "inter.ppi", "intra.ppi", "lncrna.ppi", "promoter","marker.atac", "common.atac") #, "cevm", , "multi.ppi", "findmarkers", "cevm", "go.cc.ppi" #, 
 

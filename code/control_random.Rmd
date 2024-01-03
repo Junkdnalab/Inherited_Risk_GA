@@ -648,6 +648,20 @@ nearbygenes <- nearbygenes_10xgenomics; rm(nearbygenes_10xgenomics); gc()
 ## First one is ATAC data
 ## Make gwas snps into granges
 ## Get all snps (lead snp +  ld)
+load("/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/code/vs_controls.rda") 
+set.seed(514)
+x <- sample(x = 1:3, size = 1)
+
+ctrl <- vs_controls[[x]] ## Select control
+rm(vs_controls, x); gc()
+
+data <- ctrl %>% ungroup() %>% dplyr::select(CHR, POS) %>%
+  dplyr::rename("CHR_ID"="CHR", "CHR_POS"="POS") %>%
+  mutate(CHR_ID = paste0("chr", CHR_ID),
+         SNP_ID_CURRENT = paste0(CHR_ID, ":", CHR_POS)) %>%
+  distinct()
+
+
 all.snps <- data[,c("CHR_ID", "CHR_POS")] %>%
   mutate(SNPS = paste0(CHR_ID, ":", CHR_POS)) %>%
   mutate(CHR_ID = gsub(pattern = "chr\\.*", replacement = "", x = .$CHR_ID)) %>%
@@ -1704,7 +1718,7 @@ get.of.hits <- function(data, obj.fun) { ## Data is df of locus, gene and cell t
           na.omit()
       
       if(nrow(marker.obj) == 0) {
-          marker.ppi.obj <- data %>% mutate(marker.ppi = 0)
+          marker.res <- data %>% mutate(marker.ppi = 0)
       } else {
         df1 <- marker.obj %>% dplyr::select(gene1, celltype1) %>% 'colnames<-' (c("gene", "celltype")) %>% distinct()
         df2 <- marker.obj %>% dplyr::select(gene2, celltype2) %>% 'colnames<-' (c("gene", "celltype")) %>% distinct()
@@ -1893,6 +1907,63 @@ b_res <- get.of.hits(data = data, obj.fun = obj.fun)
 
 ```
 
+Alzheimer OF hits
+```{r}
+rm(list = ls(all.names = T)); gc()
+## Make sure to run the get.of.hits function in the previous chunk
+load("/drive-pool/data/peter_data/genetic_programming/alz_nearbygenes_200kb_notelmer_10xgenomic_with_LD.rda") ## candidates near snps
+nearbygenes <- nearbygenes_10xgenomics; rm(nearbygenes_10xgenomics)
+
+load("/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/alz.gp.prereq.rda")
+
+load("/drive-pool/data/peter_data/genetic_programming/code/brca/alz_ld_multi.run_120623.rda")
+alz_data <- multi.gp[[1]]; rm(multi.gp)
+top.proposal <- alz_data[["proposal"]]
+loci <- nrow(top.proposal)/1000
+genes <- subset(top.proposal, select = c(locus, gene))
+geneframe <- data.frame(locus=character(length(loci)), gene = character(length(loci)), Freq = integer(length(loci)))
+j <- 1
+for (i in unique(genes$locus)) {
+  genetab <- as.data.frame(table(subset(genes, locus==i)))
+  topgene <- which(genetab$Freq == max(genetab$Freq))
+  if(length(topgene)>1) {
+    topgene <- which(genetab$Freq == max(genetab$Freq)) %>% .[1]
+  }
+  geneframe[j,1] <- as.character(genetab[topgene,1])
+  geneframe[j,2] <- as.character(genetab[topgene,2])
+  geneframe[j,3] <- genetab[topgene,3]
+  j <- j+1
+}
+
+cells <- subset(top.proposal, select = c(locus, celltype))
+cellframe <- data.frame(locus=character(length(loci)), celltype = character(length(loci)), Freq = integer(length(loci)))
+j <- 1
+for (i in unique(cells$locus)) {
+  celltab <- as.data.frame(table(subset(cells, locus == i)))
+  topcell <- which(celltab$Freq == max(celltab$Freq))
+  if(length(topcell)>1) {
+    topcell <- which(celltab$Freq == max(celltab$Freq)) %>% .[1]
+  }
+  cellframe[j,1] <- as.character(celltab[topcell,1])
+  cellframe[j,2] <- as.character(celltab[topcell,2])
+  cellframe[j,3] <- celltab[topcell,3]
+  j <- j+1
+}
+
+result <- merge(geneframe, cellframe, by = "locus") %>%
+  left_join(x = ., y = distinct(nearbygenes[, c("gene_name", "gene_type")]), by = c("gene"="gene_name"))
+
+## What objective function are we interested in?
+obj.fun <- c("marker.gene", "magma", "hi.mut", "ppi", "marker.ppi", "inter.ppi", "intra.ppi", "lncrna.ppi", "promoter","marker.atac", "common.atac")
+
+data <- result %>% dplyr::select(locus, gene, celltype)
+## Pretty much run the same chucks but with breast data from brca_gp.Rmd
+
+a_res <- get.of.hits(data = data, obj.fun = obj.fun)      
+save(a_res, file = "/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/a_res.rda")
+
+```
+
 Run Chi-square on control and brca result
 ```{r}
 rm(list = ls(all.names = T)); gc()
@@ -1939,9 +2010,17 @@ of.chisq.res$signif <- case_when(of.chisq.res$padj >= 0.05 ~ 0, ## Convert padj 
                                  of.chisq.res$padj < 0.05 ~ 1)
 ```
 
-Run Chi-square on control and brca result
+Code block for storing results from the follow 3 chunks below
 ```{r}
-rm(list = ls(all.names = T)); gc()
+beta.compare.res <- list()
+
+## See the 4th block after this one for the rest of the code
+```
+
+
+Run Beta distribution test on control and brca result
+```{r}
+#rm(list = ls(all.names = T)); gc()
 
 ## Load breast and control result
 load("/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/b_res.rda")
@@ -1982,16 +2061,17 @@ for(n in rownames(b_data)) {
   pval <- sum(beta.res < 0)/1e5 ## How many times is the fg less than the bg? divided by n in rbeta
   
   res <- data.frame(obj.fun = n,
-                    breast.hits = breast[1],
-                    breast.nohits  = breast[2],
-                    ctrl.hits = ctrl[1],
-                    ctrl.nohits = ctrl[2],
+                    fg.hits = breast[1],
+                    fg.nohits  = breast[2],
+                    bg.hits = ctrl[1],
+                    bg.nohits = ctrl[2],
                     lower.ci = round(quant_diff[1], 3),
                     median = round(quant_diff[2], 3),
                     upper.ci = round(quant_diff[3], 3),
                     n = n.sim,
                     fglessbg = sum(beta.res < 0),
-                    pval = pval)
+                    pval = pval,
+                    group = "breastvsctrl")
   
   of_beta_res[[n]] <- res
   
@@ -2005,4 +2085,156 @@ of_beta_res$cross.zero <- case_when(of_beta_res$lower.ci <= 0 ~ 1,
                                     of_beta_res$lower.ci > 0 ~ 0)
 rownames(of_beta_res) <- NULL
 of_beta_res
+
+beta.compare.res[[1]] <- of_beta_res
 ```
+
+Run Beta distribution test on control and alz result
+```{r}
+#rm(list = ls(all.names = T)); gc()
+
+## Load alz and control result
+load("/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/a_res.rda")
+load("/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/c_res.rda")
+
+a_data <- a_res %>% dplyr::select(-locus, -gene, -celltype) %>% 
+  colSums() %>% as.data.frame() %>%
+  dplyr::rename("hits" = ".") %>%
+  mutate(no_hits = nrow(a_res) - hits,
+         type = "alzheimer")
+
+c_data <- c_res %>% dplyr::select(-locus, -gene, -celltype) %>% 
+  colSums() %>% as.data.frame() %>%
+  dplyr::rename("hits" = ".") %>%
+  mutate(no_hits = nrow(c_res) - hits,
+         type = "control")
+
+rm(c_res, a_res); gc()
+
+## Check whether observed vs expected is statistically significantly diff
+
+of_beta_res <- list() ## store results from beta distribution
+CI <- 0.025 ## confidence interval
+n.sim <- 1e5
+
+for(n in rownames(a_data)) {
+  ## Get res from individual obj function
+  alzheimer <- as.numeric(a_data[which(rownames(a_data) == n), c(1:2)])
+  ctrl <- as.numeric(c_data[which(rownames(c_data) == n), c(1:2)])
+  
+  fg_rbeta <- rbeta(n = n.sim, shape1 = alzheimer[1], shape2 = alzheimer[2])
+  bg_rbeta <- rbeta(n = n.sim, shape1 = ctrl[1], shape2 = ctrl[2])
+  
+  beta.res <- fg_rbeta - bg_rbeta
+  
+  
+  quant_diff <- quantile(beta.res, c(CI, 0.5, 1-CI))
+  pval <- sum(beta.res < 0)/1e5 ## How many times is the fg less than the bg? divided by n in rbeta
+  
+  res <- data.frame(obj.fun = n,
+                    fg.hits = alzheimer[1],
+                    fg.nohits  = alzheimer[2],
+                    bg.hits = ctrl[1],
+                    bg.nohits = ctrl[2],
+                    lower.ci = round(quant_diff[1], 3),
+                    median = round(quant_diff[2], 3),
+                    upper.ci = round(quant_diff[3], 3),
+                    n = n.sim,
+                    fglessbg = sum(beta.res < 0),
+                    pval = pval,
+                    group = "alzheimervsctrl")
+  
+  of_beta_res[[n]] <- res
+  
+}
+
+of_beta_res <- as.data.frame(do.call(rbind, of_beta_res))
+of_beta_res$padj <- p.adjust(of_beta_res$pval, "BH") ## multiple hypothesis correction
+of_beta_res$signif <- case_when(of_beta_res$padj >= 0.05 ~ 0, ## Convert padj to boolean value. FDR is set to 0.05
+                                of_beta_res$padj < 0.05 ~ 1)
+of_beta_res$cross.zero <- case_when(of_beta_res$lower.ci <= 0 ~ 1,
+                                    of_beta_res$lower.ci > 0 ~ 0)
+rownames(of_beta_res) <- NULL
+of_beta_res
+
+beta.compare.res[[2]] <- of_beta_res
+```
+
+Run Beta distribution test on alzheimer and breast result
+```{r}
+#rm(list = ls(all.names = T)); gc()
+
+## Load alz and control result
+load("/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/a_res.rda")
+load("/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/b_res.rda")
+
+a_data <- a_res %>% dplyr::select(-locus, -gene, -celltype) %>% 
+  colSums() %>% as.data.frame() %>%
+  dplyr::rename("hits" = ".") %>%
+  mutate(no_hits = nrow(a_res) - hits,
+         type = "alzheimer")
+
+b_data <- b_res %>% dplyr::select(-locus, -gene, -celltype) %>% 
+  colSums() %>% as.data.frame() %>%
+  dplyr::rename("hits" = ".") %>%
+  mutate(no_hits = nrow(b_res) - hits,
+         type = "breast")
+
+rm(b_res, a_res); gc()
+
+## Check whether observed vs expected is statistically significantly diff
+
+of_beta_res <- list() ## store results from beta distribution
+CI <- 0.025 ## confidence interval
+n.sim <- 1e5
+
+for(n in rownames(a_data)) {
+  ## Get res from individual obj function
+  alzheimer <- as.numeric(a_data[which(rownames(a_data) == n), c(1:2)])
+  breast <- as.numeric(b_data[which(rownames(b_data) == n), c(1:2)])
+  
+  fg_rbeta <- rbeta(n = n.sim, shape1 = breast[1], shape2 = breast[2])
+  bg_rbeta <- rbeta(n = n.sim, shape1 = alzheimer[1], shape2 = alzheimer[2])
+  
+  beta.res <- fg_rbeta - bg_rbeta
+  
+  
+  quant_diff <- quantile(beta.res, c(CI, 0.5, 1-CI))
+  pval <- sum(beta.res < 0)/1e5 ## How many times is the fg less than the bg? divided by n in rbeta
+  
+  res <- data.frame(obj.fun = n,
+                    fg.hits = breast[1],
+                    fg.nohits  = breast[2],
+                    bg.hits = alzheimer[1],
+                    bg.nohits = alzheimer[2],
+                    lower.ci = round(quant_diff[1], 3),
+                    median = round(quant_diff[2], 3),
+                    upper.ci = round(quant_diff[3], 3),
+                    n = n.sim,
+                    fglessbg = sum(beta.res < 0),
+                    pval = pval,
+                    group = "breastvsalzheimer")
+  
+  of_beta_res[[n]] <- res
+  
+}
+
+of_beta_res <- as.data.frame(do.call(rbind, of_beta_res))
+of_beta_res$padj <- p.adjust(of_beta_res$pval, "BH") ## multiple hypothesis correction
+of_beta_res$signif <- case_when(of_beta_res$padj >= 0.05 ~ 0, ## Convert padj to boolean value. FDR is set to 0.05
+                                of_beta_res$padj < 0.05 ~ 1)
+of_beta_res$cross.zero <- case_when(of_beta_res$lower.ci <= 0 ~ 1,
+                                    of_beta_res$lower.ci > 0 ~ 0)
+rownames(of_beta_res) <- NULL
+of_beta_res
+
+beta.compare.res[[3]] <- of_beta_res
+```
+
+Code block for storing results from the follow 3 chunks below (continued)
+```{r}
+beta.compare.res <- as.data.frame(do.call(rbind,beta.compare.res))
+
+beta.compare.res %>% dplyr::select(-n)
+```
+
