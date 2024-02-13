@@ -245,7 +245,7 @@ ggplot(data = plot.n.snps, aes(x = Freq)) +
   ggtitle("Distribution of SNPs in LD for 174 breast cancer risk SNPs")
 
 ## Plotting the distribution of distance of snps in LD
-ggplot(data = ld, aes(x = Distance, group = LEAD_SNP)) +
+ggplot(data = ld, aes(x = Distance, group = snp)) +
   geom_density(alpha = 0.05) + 
   theme_minimal() +
   xlab("Distance from Lead SNP") + ylab("Density") +
