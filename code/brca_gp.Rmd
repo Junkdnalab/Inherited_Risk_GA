@@ -62,6 +62,8 @@ geneAnnot.df <- gtf.df %>% dplyr::select(seqnames,
                                          gene_name,
                                          gene_type)
 
+geneWidth <- gtf.df %>% dplyr::select(gene_name, gene_type, width)
+save(geneWidth, file = "/drive-pool/data/peter_data/genetic_programming/code/brca/geneWidth.rda")
 
 # load("~/gwas/PCa/calc.zscore.all.genes.rda"); rm(calc.avg, calc.tpm, calc.zscore); gc()
 # geneAnnot.df <- gtf.v38.mapped.gene %>% dplyr::select(seqnames,
@@ -897,7 +899,7 @@ loci <- unique(loci2gene$cytoband)
 
 ###########################################
 ## Gene Ontology Cellular Component Prep ##
-go_gene <- map.go.gene %>% dplyr::filter(external_gene_name %in% loci2gene$gene_name)
+#go_gene <- map.go.gene %>% dplyr::filter(external_gene_name %in% loci2gene$gene_name)
 ## There is 1844 unique genes in loci2gene, but only 741 mapped with map.go.gene. Why? Naming issue? Lets check
 # check.gene <- checkGeneSymbols(unique(map.go.gene$external_gene_name)) %>%
 #   dplyr::filter(x != "")
@@ -983,6 +985,18 @@ rna.protein.map <- rna.protein.map %>% 'colnames<-' (c("gene1", "gene2")) %>%
   dplyr::select(-grp) %>%
   distinct()
 
+## Load motifbreakR in SNP and expressed in proposed cell type
+load("/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/tfbs.gene.rda")
+load("/drive-pool/data/peter_data/genetic_programming/code/brca/breast_ct_exp.rda"); rm(ct_tpm); gc()
+
+ct_exp <- ct_exp %>% dplyr::filter(expressed == TRUE) %>% 
+  dplyr::select(gene_name, type) %>%
+  distinct() %>%
+  remove_rownames() %>%
+  dplyr::filter(gene_name %in% unique(mb.tfbs.disrupt$geneSymbol))
+
+mb.tfbs.disrupt$tfbs <- 1
+
  # save(atac.marker, breast.cancer.gene, celltalkdb, celltalk_gene, cevm.genes, common.atac.hit, cevm.genes, combined.gene.marker,
  #      common.atac.hit, intra.ppi.gene, magma, marker.hits, ppi, promoter.df, rna.protein.map, 
  #      file = "/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/brca.gp.prereq.rda")
@@ -997,7 +1011,7 @@ multi_proposal <- mclapply(X = as.list(1:n_proposal), FUN = function(x) {
 multi_proposal <- as.data.frame(do.call(rbind, multi_proposal))
 #save(multi_proposal, file = "/drive-pool/data/peter_data/genetic_programming/code/brca/multi_proposal_012924.rda")
 ## Objective function
-obj.fun <- c("marker.gene", "magma", "hi.mut", "ppi", "marker.ppi", "inter.ppi", "intra.ppi", "lncrna.ppi", "promoter","marker.atac", "common.atac") #, "cevm", , "multi.ppi", "findmarkers", "cevm", "go.cc.ppi" #, 
+obj.fun <- c("marker.gene", "magma", "hi.mut", "ppi", "marker.ppi", "inter.ppi", "intra.ppi", "lncrna.ppi", "promoter","marker.atac", "common.atac", "tfbs") #, "cevm", , "multi.ppi", "findmarkers", "cevm", "go.cc.ppi" #, 
 
 obj.fun <- c("ppi", "inter.ppi", "intra.ppi", "lncrna.ppi", "promoter")
 
@@ -1012,7 +1026,7 @@ multi.gp <- mclapply(X = as.list(1:3), FUN = function(x) {
   gwas_gp(init.proposal = multi_proposal, generations = 100, obj.fun = obj.fun, khan.method = TRUE)
   }, mc.cores = 3)
 date()
-save(multi.gp, file = "/drive-pool/data/peter_data/genetic_programming/code/brca/multi.run_nobreastmultiomics_021224.rda")
+save(multi.gp, file = "/drive-pool/data/peter_data/genetic_programming/code/brca/multi.run_021624.rda")
 
 ###################
 ## Post analysis ##
@@ -1023,8 +1037,10 @@ save(multi.gp, file = "/drive-pool/data/peter_data/genetic_programming/code/brca
 #load("/drive-pool/data/peter_data/genetic_programming/code/brca/multi.run_nofusion.rda")
 load("/drive-pool/data/peter_data/genetic_programming/code/brca/multi.run_110723.rda")
 load("/drive-pool/data/peter_data/genetic_programming/code/brca/multi.run_nobreastmultiomics_013124.rda")
+load("/drive-pool/data/peter_data/genetic_programming/code/brca/multi.run_021624.rda")
+load("/drive-pool/data/peter_data/genetic_programming/code/brca/breast_multi.run_nobreastmultiomics_022024.rda")
 
-test.run <- multi.gp[[1]]
+test.run <- multi.gp[[2]]
 #test.run <- ga.run
 top.proposal <- test.run[["proposal"]]
 loci <- 206
@@ -1060,14 +1076,14 @@ for (i in unique(cells$locus)) {
 
 result <- merge(geneframe, cellframe, by = "locus") %>%
   left_join(x = ., y = distinct(nearbygenes[, c("gene_name", "gene_type")]), by = c("gene"="gene_name"))
-
+#result %>% dplyr::filter(Freq.x >= 700, Freq.y >= 700) %>% .[order(desc(.$Freq.x), desc(.$Freq.y)),]
 #write.table(x = result, file = "~/summ.confidcall.txt", quote = FALSE, row.names = FALSE)
 
 fitness.allgen <- as.data.frame(do.call(rbind, test.run[1:100]))
 
 gp.plotdata <- fitness.allgen %>% gather(data = ., key = "method", value = "fraction", -n, -gen)
 unique(gp.plotdata$method)
-gp.plotdata$method <- factor(gp.plotdata$method, levels = c("marker.gene", "magma", "cancer.gene", "ppi", "marker.ppi", "inter.ppi", "intra.ppi", "lncrna", "promoter", "marker.atac", "common.atac", "fitness")) 
+gp.plotdata$method <- factor(gp.plotdata$method, levels = c("marker.gene", "magma", "cancer.gene", "ppi", "marker.ppi", "inter.ppi", "intra.ppi", "lncrna", "promoter", "marker.atac", "common.atac", "tfbs","fitness")) 
 
 ggplot(data = gp.plotdata, aes(x = gen, y = fraction)) +
   geom_point(alpha = 0.02, position = "jitter", pch = 16) +
@@ -1078,6 +1094,9 @@ ggplot(data = gp.plotdata, aes(x = gen, y = fraction)) +
   scale_x_continuous(breaks = seq(0, 100, by = 25))
 
 ggsave(filename = "~/brca_gp_progressive_summary_200kb_50gen_071223_updatedmarkers.png", width = 20, height = 7)
+
+result %>% dplyr::filter(Freq.x >= 700,
+                         Freq.y >= 700)
 
 
 ## Top proposal gene and cell distribution
