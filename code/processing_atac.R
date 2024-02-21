@@ -476,6 +476,7 @@ common.atac.hit[which(is.na(common.atac.hit$LEAD_SNP)), "LEAD_SNP"] <- common.at
 
 save(common.atac.hit, file = "/drive-pool/data/peter_data/genetic_programming/code/brca/ld_common_atac_peak.rda")
 load("/drive-pool/data/peter_data/genetic_programming/code/brca/ld_common_atac_peak.rda")
+
 ## Test stuff to see peaks
 peakset <- getPeakSet(projCis)
 peakset <- peakset[names(peakset) %in% c("Fibroblast CF", "LUM_HR-neg CF"),]
