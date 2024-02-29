@@ -1035,12 +1035,13 @@ save(multi.gp, file = "/drive-pool/data/peter_data/genetic_programming/code/brca
 #load("/drive-pool/data/peter_data/genetic_programming/code/brca/ga.run_breast.rda")
 #load("/drive-pool/data/peter_data/genetic_programming/code/brca/multi.run.rda")
 #load("/drive-pool/data/peter_data/genetic_programming/code/brca/multi.run_nofusion.rda")
-load("/drive-pool/data/peter_data/genetic_programming/code/brca/multi.run_110723.rda")
-load("/drive-pool/data/peter_data/genetic_programming/code/brca/multi.run_nobreastmultiomics_013124.rda")
-load("/drive-pool/data/peter_data/genetic_programming/code/brca/multi.run_021624.rda")
-load("/drive-pool/data/peter_data/genetic_programming/code/brca/breast_multi.run_nobreastmultiomics_022024.rda")
+# load("/drive-pool/data/peter_data/genetic_programming/code/brca/multi.run_110723.rda")
+# load("/drive-pool/data/peter_data/genetic_programming/code/brca/multi.run_nobreastmultiomics_013124.rda")
+# load("/drive-pool/data/peter_data/genetic_programming/code/brca/multi.run_021624.rda")
+# load("/drive-pool/data/peter_data/genetic_programming/code/brca/breast_multi.run_nobreastmultiomics_022024.rda")
+load("/drive-pool/data/peter_data/genetic_programming/code/brca/breast_multi.run_022624.rda")
 
-test.run <- multi.gp[[2]]
+test.run <- multi.gp[[3]]
 #test.run <- ga.run
 top.proposal <- test.run[["proposal"]]
 loci <- 206
@@ -1079,24 +1080,134 @@ result <- merge(geneframe, cellframe, by = "locus") %>%
 #result %>% dplyr::filter(Freq.x >= 700, Freq.y >= 700) %>% .[order(desc(.$Freq.x), desc(.$Freq.y)),]
 #write.table(x = result, file = "~/summ.confidcall.txt", quote = FALSE, row.names = FALSE)
 
-fitness.allgen <- as.data.frame(do.call(rbind, test.run[1:100]))
+fitness.allgen <- as.data.frame(do.call(rbind, test.run[1:150]))
 
 gp.plotdata <- fitness.allgen %>% gather(data = ., key = "method", value = "fraction", -n, -gen)
 unique(gp.plotdata$method)
-gp.plotdata$method <- factor(gp.plotdata$method, levels = c("marker.gene", "magma", "cancer.gene", "ppi", "marker.ppi", "inter.ppi", "intra.ppi", "lncrna", "promoter", "marker.atac", "common.atac", "tfbs","fitness")) 
+gp.plotdata$method <- factor(gp.plotdata$method, levels = c("marker.gene", "magma", "cancer.gene", "ppi", "marker.ppi", "inter.ppi", "intra.ppi", "lncrna", "promoter", "marker.atac", "common.atac","fitness")) 
 
 ggplot(data = gp.plotdata, aes(x = gen, y = fraction)) +
   geom_point(alpha = 0.02, position = "jitter", pch = 16) +
   theme_minimal() +
   xlab("Generations") + ylab("Fraction of Hits") +
   facet_wrap(.~method, scale = "free") +
-  ggtitle("Genetic Programming: Progressive Sampling Summary - Breast") +
-  scale_x_continuous(breaks = seq(0, 100, by = 25))
+  ggtitle("Genetic Programming: Progressive Sampling Summary - Breast (Scaled)") +
+  scale_x_continuous(breaks = seq(0, 150, by = 25))
 
 ggsave(filename = "~/brca_gp_progressive_summary_200kb_50gen_071223_updatedmarkers.png", width = 20, height = 7)
 
 result %>% dplyr::filter(Freq.x >= 700,
                          Freq.y >= 700)
+
+## Elite comparison with last gen
+elite <- test.run[["top"]] %>%
+  dplyr::filter(n == 101,
+                gen == 69) %>%
+  dplyr::rename("celltype_elite"="celltype", "gene_elite"="gene") %>% 
+  dplyr::select(locus, gene_elite, celltype_elite)
+
+compare_top <- result %>% dplyr::filter(Freq.x >= 700,
+                                        Freq.y >= 700) %>%
+  dplyr::arrange(., desc(Freq.x), desc(Freq.y)) %>%
+  left_join(x = ., y = elite, by = "locus")
+
+## Calculate elite fitness score
+exclude.celltype <- NULL
+elite$n <- 1
+elite <- elite %>% dplyr::rename(., "celltype"="celltype_elite", "gene"="gene_elite")
+elite_fitness <- calc_fitness(df = elite, obj.fun = obj.fun)
+## Calculate consensus fitness score
+consensus_fitness <- result %>% dplyr::select(locus, gene, celltype) %>%
+  mutate(n = 1) %>%
+  calc_fitness(df = ., obj.fun = obj.fun)
+
+## Density plot of last gen fitness
+last.gen.fitness <- test.run[[150]]
+last.gen.fitness <- last.gen.fitness %>% dplyr::select(fitness) %>% rownames_to_column("proposal")
+ggplot(data = last.gen.fitness, aes(x = fitness)) +
+  geom_density(fill = "grey50", alpha = 0.5) +
+  theme_bw() +
+  geom_vline(aes(xintercept = elite_fitness),
+            color = "blue", linetype = "dashed", size = 0.5) +
+  geom_vline(aes(xintercept = consensus_fitness),
+            color = "red", linetype = "dashed", size = 0.5) +
+  ggtitle("Density==last.gen.fitness; Blue==elite; Red==consensus")
+  
+
+################
+## Get OF hit ##
+################
+consensus_of <- result %>% dplyr::select(locus, gene, celltype) %>%
+  mutate(n = "consensus")
+
+plotdata_consensus <- consensus_of %>% dplyr::select(-n) %>% get.of.hits(data = ., obj.fun = obj.fun) %>%
+  dplyr::select(-gene, -celltype) %>%
+  column_to_rownames(var = "locus")
+
+xx <- pheatmap(mat = plotdata_consensus)
+
+save_pheatmap_pdf <- function(x, filename, width=7, height=7) {
+   stopifnot(!missing(x))
+   stopifnot(!missing(filename))
+   pdf(filename, width=width, height=height)
+   grid::grid.newpage()
+   grid::grid.draw(x$gtable)
+   dev.off()
+}
+save_pheatmap_pdf(xx, "test.pdf")
+
+proposals <- test.run[["proposal"]] %>% dplyr::select(-gen) %>%
+  rbind(., consensus_of)
+
+of.hit.list <- list()
+for(p in unique(proposals$n)) {
+  print(p)
+  df <- proposals %>% dplyr::filter(n == p) %>% 
+    dplyr::select(-n) %>%
+    get.of.hits(data = ., obj.fun = obj.fun) %>% 
+    mutate(of.hit = rowSums(.[4:11])) %>%
+    dplyr::select(locus, of.hit) %>%
+    mutate(of.hit = case_when(of.hit > 0 ~ 1,
+                              of.hit == 0 ~ 0),
+           proposal = paste0("proposal_", p))
+  of.hit.list[[p]] <- df
+  
+}
+
+plotdata <- as.data.frame(do.call(rbind, of.hit.list))
+plotdata <- plotdata %>% spread(data = ., key = "proposal", value = "of.hit") %>%
+  column_to_rownames(var = "locus") 
+
+library(pheatmap)
+
+annotation <- data.frame(Var1 = c(rep(x = "proposal", times = 1e3), "consensus"))
+rownames(annotation) <- colnames(plotdata)
+
+pheatmap(mat = plotdata,
+         show_rownames = FALSE, 
+         show_colnames = FALSE,
+         treeheight_col = 0,
+         annotation = annotation)
+
+total.locus <- data.frame(n_loci = colSums(plotdata))
+consensus.locus <- total.locus[1001,]
+
+individual.proposal <- total.locus %>% rownames_to_column(var = "proposal") %>%
+  .[1:1000,] 
+
+ggplot(data = individual.proposal, aes(x = n_loci)) +
+  geom_density(fill = "grey", alpha = 0.5) +
+  geom_vline(aes(xintercept = consensus.locus),
+            color = "red", linetype = "dashed", size = 0.5) +
+  theme_bw() +
+  ggtitle("Number of Loci with at least one obj func hit")
+
+consensus_of <- result %>% dplyr::select(locus, gene, celltype) %>%
+  get.of.hits(data = ., obj.fun = obj.fun) %>% 
+  mutate(of.hit = rowSums(.[4:11])) %>%
+  dplyr::select(locus, of.hit) %>%
+  mutate(of.hit = case_when(of.hit > 0 ~ 1,
+                            of.hit == 0 ~ 0))
 
 
 ## Top proposal gene and cell distribution
@@ -1124,537 +1235,8 @@ ggplot(celltype, aes(fill=Var1, y=Freq, x="rs11749176")) +
 load("/drive-pool/data/peter_data/genetic_programming/kelly.colours.rda")
 ```
 
-Generate summary figures for GA run
-```{r}
-## Get the maximum hits per OF based on SNP 
-obj.fun ## This is the OF used in the GA run
 
-## Function to get maximum hit INDEPENDENT of all other OF; data is nearbygene data
-## Before running function. load all data required for GA run above.
 
-## Result is from using GA last gen proposals top calls for each 
-## Data must have locus, gene and celltype information
-data <- result[, c("locus", "gene", "celltype")] 
 
-get.hits <- function(data) { 
-  if("marker.gene" %in% obj.fun) {
-    ## Prepare marker df
-    of1 <- combined.gene.marker %>% mutate(hit = 1) %>% dplyr::select(-celltype) %>% distinct()
-    d1 <- data %>% left_join(x = ., y = of1, by = "gene") %>%
-      mutate(hit = replace_na(hit, 0)) %>%
-      dplyr::group_by(locus) %>%
-      dplyr::summarise(marker.gene = sum(hit)) %>%
-      mutate(marker.gene = case_when(marker.gene > 0 ~ 1,
-                                     marker.gene == 0 ~ 0))
-  }
-  if("magma" %in% obj.fun) {
-    d2 <- data %>% left_join(x = ., y = magma, by = "gene") %>%
-      mutate(magma = replace_na(magma, 0)) %>%
-      dplyr::group_by(locus) %>%
-      dplyr::summarise(magma = sum(magma)) %>%
-      mutate(magma = case_when(magma > 0 ~ 1,
-                               magma == 0 ~ 0))
-  }
-  if("hi.mut" %in% obj.fun) {
-    d3 <- data %>% left_join(x = ., y = breast.cancer.gene, by = "gene") %>%
-      mutate(cancer.gene = replace_na(cancer.gene, 0)) %>%
-      dplyr::group_by(locus) %>%
-      dplyr::summarise(cancer.gene = sum(cancer.gene)) %>%
-      mutate(cancer.gene = case_when(cancer.gene > 0 ~ 1,
-                                     cancer.gene == 0 ~ 0))
-  }
-  if("ppi" %in% obj.fun) {
-    
-  }
-  
-}
-```
 
-
-
-Make heatmap
-```{r}
-khan.fitness <- test.run[["fitness"]][1,]
-top.proposal <- test.run[["top"]] %>% dplyr::filter(n == khan.fitness[,"n"],
-                                                    gen == khan.fitness[,"gen"]) %>%
-  dplyr::select(-n, -gen)
-
-heatmap.data <- result %>% dplyr::select(locus, gene, celltype)
-
-## Creating heatmap of positive hits by proposal elements
-fm <- marker.hits %>% mutate(fm = 1)
-cevm <- cevm.genes %>% mutate(cevm = 1)
-all.markers <- combined.gene.marker %>% mutate(marker.gene = 1) %>% distinct()
-
-heatmap_of <- function(data) {
-  
-  #########
-  ## PPI ##
-  ## Identify all genes that have PPI
-  match.set <- ppi %>% left_join(x = ., y = data, by = c("gene1"="gene"),
-                                 relationship = "many-to-many") %>%
-    dplyr::rename("celltype1"="celltype", "locus1"="locus") %>%
-    left_join(x = ., y = data, by = c("gene2"="gene"),
-              relationship = "many-to-many") %>%
-    dplyr::rename("celltype2"="celltype", "locus2"="locus") %>% 
-    na.omit()
-  
-  ppi.genes <- data.frame(gene = unique(c(match.set$gene1, match.set$gene2)),
-                          ppi = 1)
-  ################
-  ## Marker PPI ##
-  ## Identify all genes that have PPI and are expressed in correct celltype
-  marker.obj <- match.set %>% left_join(x = ., 
-                                        y = all.markers, 
-                                        by = c("gene1"="gene", "celltype1"="celltype")) %>%
-    left_join(x = ., y = all.markers, by = c("gene2"="gene", "celltype2"="celltype")) %>%
-    na.omit()
-  ## Get col 1:3
-  df1 <- marker.obj[,c(1,3,4)] %>% 'colnames<-' (c("gene", "celltype", "locus"))
-  ## Get col 4:6
-  df2 <- marker.obj[,c(2,5,6)] %>% 'colnames<-' (c("gene", "celltype", "locus"))
-  marker.ppi.gene <- rbind(df1,df2) %>% distinct() %>% mutate(marker.ppi = 1)
-  
-  #####################
-  ## RNA-PROTEIN PPI ##
-  ## Get info on proposal
-  lnrna.protein.set <- rna.protein.map %>% left_join(x = ., y = data, by = c("gene1"="gene"),
-                                             relationship = "many-to-many") %>%
-    dplyr::rename("celltype1"="celltype", "locus1"="locus") %>%
-    left_join(x = ., y = data, by = c("gene2"="gene"),
-              relationship = "many-to-many") %>%
-    dplyr::rename("celltype2"="celltype", "locus2"="locus") %>% 
-    na.omit()
-  if(nrow(lnrna.protein.set) > 1) {
-    lncrna.genes <- data.frame(gene = unique(c(lnrna.protein.set$gene1, lnrna.protein.set$gene2)),
-                               lncrna = 1)
-  } else {
-    lncrna.genes <- data.frame(gene = data$gene,
-                               lncrna = 0)
-  }
-
-  
-  #################
-  ## ATAC marker ##
-  m.atac.set <- data %>% left_join(x = ., y = atac.marker, by = c("locus", "celltype")) %>%
-    dplyr::filter(marker.atac == 1)
-  
-  #################
-  ## ATAC common ##
-  c.atac.set <- data %>% left_join(x = ., y = common.atac.hit, by = c("locus", "celltype")) %>%
-    dplyr::filter(common.atac == 1)
-  
-  ###########
-  ## GO.CC ##
-  # go.ppi.df <- match.set %>% dplyr::select(-celltype1, -celltype2) %>%
-  #     left_join(x = ., ## Add cellular component info for all genes in gene1 (NA means no info on gene)
-  #               y = map.go.gene[,c("external_gene_name", "name_1006")], 
-  #               by = c("gene1"="external_gene_name"), 
-  #               relationship = "many-to-many") %>%
-  #     dplyr::rename("cc1"="name_1006") %>% ## Rename cc column as cc1 to link to gene1
-  #     left_join(x = ., ## Add cc info for gene2
-  #               y = map.go.gene[,c("external_gene_name", "name_1006")],
-  #               by = c("gene2"="external_gene_name"),
-  #               relationship = "many-to-many") %>%
-  #     dplyr::rename("cc2"="name_1006") %>% ## Rename cc column as cc2 to link to gene2
-  #     .[which(.$cc1 == .$cc2),] ## Filter for cases where gene1 and gene2 are in same cellular compartment
-  #   ## Get all genes from go.ppi.df
-  #   go.genes <- data.frame(gene = unique(c(go.ppi.df$gene1, go.ppi.df$gene2)),
-  #                          go.cc = 1)
-    
-    ###############
-    ## Inter.ppi ##
-    inter.obj <- marker.obj %>% left_join(x = ., 
-                                          y = celltalkdb[,c("source_genesymbol", "inter.ppi")], 
-                                          by = c("gene1"="source_genesymbol"),
-                                          relationship = "many-to-many") %>%
-      distinct() %>%
-      dplyr::rename("source_gene1" = "inter.ppi") %>%
-      left_join(x = ., 
-                y = celltalkdb[,c("source_genesymbol", "inter.ppi")],
-                by = c("gene2"="source_genesymbol"),
-                relationship = "many-to-many") %>%
-      distinct() %>% 
-      dplyr::rename("source_gene2" = "inter.ppi") %>%
-      .[which(rowSums(.[,c("source_gene1", "source_gene2")], na.rm = TRUE) == 1),] %>%
-      
-      ## Now trying to find targets the same way we did for source genes
-      left_join(x = ., 
-                y = celltalkdb[,c("target_genesymbol", "inter.ppi")],
-                by = c("gene1"="target_genesymbol"),
-                relationship = "many-to-many") %>%
-      distinct() %>%
-      dplyr::rename("target_gene1" = "inter.ppi") %>%
-      left_join(x = ., 
-                y = celltalkdb[,c("target_genesymbol", "inter.ppi")],
-                by = c("gene2"="target_genesymbol"),
-                relationship = "many-to-many") %>%
-      distinct() %>%
-      dplyr::rename("target_gene2" = "inter.ppi") %>%
-      .[which(rowSums(.[,c("target_gene1", "target_gene2")], na.rm = TRUE) == 1),] %>%
-      ## Removing target and source identity column
-      dplyr::select(-source_gene1, -source_gene2, -target_gene1, -target_gene2)
-    
-    df1 <- inter.obj %>% dplyr::select(gene1, celltype1, locus1) %>% 'colnames<-' (c("gene", "celltype", "locus")) %>% distinct()
-    df2 <- inter.obj %>% dplyr::select(gene2, celltype2, locus2) %>% 'colnames<-' (c("gene", "celltype", "locus")) %>% distinct()
-    inter.ppi.set <- rbind(df1, df2) %>% mutate(inter.ppi = 1) %>% distinct()
-  
-  ###############
-  ## Intra.ppi ##
-  intra.df <- match.set %>% mutate(intra.commun = case_when(celltype1 == celltype2 ~ 1,     
-                                                            celltype1 != celltype2 ~ 0)) %>%
-      dplyr:::filter(intra.commun == 1) %>%
-      group_by(grp = paste(pmax(gene1, gene2), ## Keep only intra combo (no celltalk combo)
-                               pmin(gene1, gene2), sep = "_")) %>%
-      dplyr::filter(!grp %in% celltalk_gene$grp) %>%
-      ungroup() %>%
-      dplyr::select(-grp) %>%
-      distinct()
-    
-  df1 <- intra.df %>% dplyr::select(gene1, celltype1, locus1) %>%
-    dplyr::rename("gene"="gene1", "celltype"="celltype1", "locus"="locus1")
-  df2 <- intra.df %>% dplyr::select(gene2, celltype2, locus2) %>%
-    dplyr::rename("gene"="gene2", "celltype"="celltype2", "locus"="locus2")
-
-  intra.ppi.genes <- rbind(df1, df2) %>% distinct() %>%
-    mutate(intra.ppi = 1)
-  
-  #######################
-  ## Get final summary ##
-  res <- data %>% left_join(x = ., y = fm, by = c("gene", "celltype")) %>%
-    left_join(x = ., y = cevm, by = c("gene", "celltype")) %>%
-    left_join(x = ., y = ppi.genes, by = "gene") %>%
-    left_join(x= ., y = marker.ppi.gene, by = c("gene", "locus", "celltype")) %>%
-    left_join(x = ., y = magma, by = c("gene")) %>%
-    left_join(x = ., y = breast.cancer.gene, by = c("gene")) %>%
-    left_join(x = ., y = promoter.df, by = c("gene", "locus")) %>%
-    left_join(x = ., y = lncrna.genes, by = c("gene")) %>%
-    left_join(x = ., y = m.atac.set, by = c("gene", "locus", "celltype")) %>%
-    left_join(x = ., y = c.atac.set, by = c("gene", "locus", "celltype")) %>%
-    #left_join(x = ., y = go.genes, by = "gene") %>%
-    left_join(x = ., y = inter.ppi.set, by = c("gene", "locus", "celltype")) %>%
-    left_join(x = ., y = intra.ppi.genes, by = c("gene", "locus", "celltype")) %>%
-    distinct()
-    # mutate(proposal_elem = paste(gene, locus, celltype, sep = "_")) %>%
-    # dplyr::select(-gene, -locus, -celltype) %>%
-    # distinct() %>%
-    # column_to_rownames(var = "proposal_elem")
-  
-  res[is.na(res)] <- 0
-  
-  res
-}
-
-df <- heatmap_of(data = top.proposal)
-df <- heatmap_of(data = heatmap.data)
-
-x <- pheatmap(df[c(4:15)],
-              fontsize_row = 7,
-              #annotation_row = row_anno
-)
-
-## Something for dennis. comparing top result with OF hits summary
-result <- result %>% left_join(x = ., y = df, by = c("locus", "gene", "celltype"))
-write.table(result, file = "~/summ.confidcall.txt")
-## End of sometlhing fro dennis
-
-rdendro.order <- rownames(df)[x$tree_row$order]
-cdendro.order <- names(df)[x$tree_col$order]
-
-gg.df <- df %>% rownames_to_column(var = "prop.elem") %>%
-  gather(data = ., key = "of", value = "hit", -prop.elem)
-
-gg.df$prop.elem <- factor(x = gg.df$prop.elem, levels = rev(rdendro.order))
-gg.df$of <- factor(x = gg.df$of, levels = cdendro.order)
-
-color.hit <- c("grey", "firebrick3")
-names(color.hit) <- c("0", "1")
-dev.off()
-of.plot <- ggplot(gg.df, aes(x = of, y = prop.elem, fill = as.character(hit))) +
-  geom_tile() +
-  scale_fill_manual(values = color.hit) +
-  xlab("") + ylab("") + labs(fill = "Status") +
-  theme(
-    strip.text = element_blank(),
-    axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5, size = 8),
-    axis.text.y = element_text(size = 6)
-  )
-of.plot
-ggsave(filename = "~/of.plot.png", width = 7, height = 14)
-
-
-## Taking a look at cases that have no OF hits. There are 33 cases
-
-no.of <- df[rowSums(df[,c(4:15)]) == 0, "locus"]
-# rsid.no.of <- data.frame(prop.elem = rownames(no.of)) %>% 
-#   separate(prop.elem, sep = "_", c("gene", "locus", "celltype")) %>% 
-#   pull(locus)
-
-
-null.ct.distri <- test.run[["proposal"]] %>% dplyr::filter(locus %in% no.of)
-null.ct.distri <- as.data.frame(table(null.ct.distri$celltype, null.ct.distri$locus))
-#null.ct.distri$Freq <- null.ct.distri$Freq / n_proposal
-load("/drive-pool/data/peter_data/genetic_programming/kelly.colours.rda")
-
-ggplot(null.ct.distri, aes(fill=Var1, y=Freq, x=Var2)) + 
-    geom_bar(position="stack", stat="identity") +
-  scale_fill_manual(values = kelly.colours[3:22]) +
-  xlab("SNP") + ylab("Frequency") + labs(fill = "") +
-  ggtitle("Celltype distribution of SNPs with 0 hits in top.proposal") +
-  theme(axis.text.x = element_blank(),
-        axis.ticks.x = element_blank())
-
-## End of chisq test
-
-## Check null nearby genes... do they have any gene that have PPI with another gene from diff loci?
-null.ppi <- ppi %>% left_join(x = ., 
-                              y = nearbygenes[, c("snp", "gene_name")], 
-                              by = c("gene1"="gene_name"),
-                              relationship = "many-to-many") %>%
-  dplyr::rename("snp1"="snp") %>%
-  left_join(x = .,
-            y = nearbygenes[, c("snp", "gene_name")],
-            by = c("gene2"="gene_name"),
-            relationship = "many-to-many") %>%
-  dplyr::rename("snp2"="snp") %>%
-  distinct() %>%
-  mutate(grp = paste(snp1, snp2, sep = "_"))
-
-## Grep grp for rsid with no OF hits
-null.ppi <- null.ppi[grep(pattern=paste(rsid.no.of,collapse="|"), x = null.ppi$grp),]
-snp.w.hits <- top.proposal$locus[!top.proposal$locus %in% rsid.no.of]
-## Grep grp for rsid with OF hits
-null.ppi <- null.ppi[grep(pattern=paste(snp.w.hits,collapse="|"), x = null.ppi$grp),]
-
-table(rsid.no.of %in% null.ppi$snp1) ## 28 out of 33 snp with no OF hits have ppi interaction
-table(rsid.no.of %in% null.ppi$snp2)
-
-## Identify proposal elements with good information. Compare confidence score estimates to null distribution
-
-## Calculate estimates confidence score for each rank per locus
-by_rsid <- null.ct.distri %>% dplyr::group_by(Var2) %>% 
-  dplyr::arrange(desc(Freq), .by_group = TRUE) %>%
-  mutate(rank = rep(x = c(1:10), times = length(no.of)))
-
-ggplot(data = by_rsid, aes(x = Freq)) +
-  geom_density() +
-  theme_bw() +
-  xlim(c(0,1)) +
-  facet_wrap(.~rank) +
-  ggtitle("Null Ranked Cell Type Confidence Score")
-
-
-rank1 <- by_rsid %>% dplyr::filter(rank == 1)
-rank1.density <- density(rank1$Freq)
-plot(rank1.density)
-
-rank2 <- by_rsid %>% dplyr::filter(rank == 2)
-rank2.density <- density(rank2$Freq)
-plot(rank2.density)
-
-
-
-beta_params(mean = 0.5885, sigma = 0.1642)
-plot(density(rbeta(100000,shape1 = 4.69737*2,shape2 =3.284567*2)))
-lines(density(rank1$Freq), col = "red")
-beta_params(mean = 0.19150, sigma = 0.10729)
-plot(density(rbeta(100000,shape1 = 2.384223,shape2 =10.06603)), xlim = c(0,1))
-lines(density(rank2$Freq), col = "red")
-lines(density(rbeta(1e5, shape1 = 93/10, shape2 = (1e3-93)/10)))
-lines(density(rbeta(1e5, shape1 = 93, shape2 = (1e3-93))))
-
-null.den <- rbeta(1e5,shape1 = 2.384223,shape2 =10.06603)
-obs.den <- rbeta(1e5, shape1 = 93/10, shape2 = (1e3-93)/10)
-
-### Question 1: what is the fold enrichment
-plot(density(obs.den/null.den), main = "fold enrichment")
-### Question 2: is the breast cancer gene enriched relative to background?
-plot(density(obs.den), xlim = c(0,1))#, xlim = c(0, 0.025), ylim = c(0, 300))
-lines(density(null.den), col='grey')
-lines(density(obs.den-null.den), col='red')
-
-res <- obs.den - null.den ## Fg - Bg ... to see how many times the Fg is larger than the Bg
-CI <- 0.025
-quant_diff <- quantile(res, c(CI, 0.5, 1-CI))
-quant_diff
-pval <- sum(res < 0)/1e5 ## How many times is the fg less than the bg? divided by n in rbeta
-pval
-
-
-## Enrichment calculation to identify snps 
-
-## Preparing data for enrichement calc
-top.res <- test.run[["top"]] ## Get top run from GA
-ct.distri <- as.data.frame(table(top.res$celltype, top.res$locus)) ## Table celltype by locus
-
-## Rank cell confidence calls and keep rank 1 and 2
-## Keeping rank 1 and 2 b/c they have some explanatory power (pattern) that all null share in distribution of 
-## confidence calls
-ct.distri <- ct.distri %>% dplyr::group_by(Var2) %>% 
-  dplyr::arrange(desc(Freq), .by_group = TRUE) %>%
-  mutate(rank = rep(x = c(1:10), times = length(unique(ct.distri$Var2)))) %>%
-  dplyr::filter(rank %in% c(1,2)) %>%
-  dplyr::select(-Var1) %>%
-  dplyr::rename("snp"="Var2")
-
-## write function to perform enrichment calc using beta distribution
-
-## Get null for r1 and r2 using the null distribution
-null.r1 <- rbeta(100000,shape1 = 4.69737*2,shape2 =3.284567*2)
-null.r2 <- rbeta(1e5,shape1 = 2.384223,shape2 =10.06603)
-
-CI <- 0.025
-counter <- 1
-## Create empty df to store res
-enrich.res <- as.data.frame(matrix(data = NA, nrow = length(loci), ncol = 13))
-names(enrich.res) <- c("snp", "r1_pval", "r2_pval", "r1_lower", "r1_med", "r1_upper", "r2_lower", "r2_med", "r2_upper", "r1_lower1", "r1_upper1", "r2_lower1", "r2_upper1")
-for(n in loci) {
-  message(paste0("Working on snp ", n, " : ", counter))
-  ## Subset data based on rank
-  spec.loci <- ct.distri %>% dplyr::filter(snp == n)
-  ## Store loci in snp col
-  enrich.res[counter, "snp"] <- n
-  for(p in c(1:2)) { ## p is rank. we are checking rank 1 and rank 2
-    ## Get specific rank confidence call
-    spec.rank <- spec.loci %>% dplyr::filter(rank == p) %>% pull(Freq)
-    ## rbeta for observed
-    obs.r <- rbeta(n = 1e5, shape1 = spec.rank, shape2 = n_proposal-spec.rank) 
-    ## Instead of using 
-    if(p == 1) {
-      res <- obs.r/null.r1 ## Calculate fold change
-      res.diff <- quantile(res, c(CI, 0.5, 1-CI)) ## Calculate quant
-      res.pval <- sum(res >= 1) / 1e5 ## Calculate pvalue
-      ## Store result
-      enrich.res[counter, "r1_pval"] <- res.pval
-      enrich.res[counter, "r1_lower"] <- as.numeric(res.diff[1])
-      enrich.res[counter, "r1_med"] <- as.numeric(res.diff[2])
-      enrich.res[counter, "r1_upper"] <- as.numeric(res.diff[3])
-      enrich.res[counter, "r1_lower1"] <- as.numeric(res.diff[1]) > 1
-      enrich.res[counter, "r1_upper1"] <- as.numeric(res.diff[3]) < 1
-      
-    } else if(p == 2) {
-      res <- obs.r/null.r2 ## Calculate fold change
-      res.diff <- quantile(res, c(CI, 0.5, 1-CI)) ## Calculate quant
-      res.pval <- sum(res >= 1) / 1e5 ## Calculate pvalue
-      ## Store result
-      enrich.res[counter, "r2_pval"] <- res.pval
-      enrich.res[counter, "r2_lower"] <- as.numeric(res.diff[1])
-      enrich.res[counter, "r2_med"] <- as.numeric(res.diff[2])
-      enrich.res[counter, "r2_upper"] <- as.numeric(res.diff[3])
-      enrich.res[counter, "r2_lower1"] <- as.numeric(res.diff[1]) > 1
-      enrich.res[counter, "r2_upper1"] <- as.numeric(res.diff[3]) < 1
-    }
-  }
-  counter <- counter + 1
-}
-
-rm(counter, pval, obs.r, res, rank.r, rank.col, spec.rank, n, p); gc()
-
-r1.hits <- enrich.res %>% dplyr::filter(r1_lower1 == TRUE,
-                                        r1_upper1 == FALSE,
-                                        r2_lower1 == FALSE,
-                                        r2_upper1 == TRUE)
-r1.hits.id <- r1.hits$snp
-
-r2.hits <- enrich.res %>% dplyr::filter(r2_lower1 == FALSE,
-                                        r2_upper1 == TRUE)
-r2.hits.id <- r2.hits$snp
-
-r1 <- result %>% dplyr::filter(locus %in% r1.hits.id)
-r2 <- result %>% dplyr::filter(locus %in% r2.hits.id)
-
-plot(density(null.r2))
-lines(density(obs.r), col = "red")
-lines(density(res), col = "grey")
-
-plot(density(null), col = "red")
-lines(density(null.r2))
-plot(density(null.r1), xlim = c(0,1))
-lines(density(null.r2), col = "grey")
-
-obs.r <- rbeta(n = 1e5, shape1 = 865, shape2 = 1000-865)
-res <- obs.r/null.r1
-quantile(res, c(CI, 0.5, 1-CI))
-pval <- sum(res >= 1) / 1e5
-pval
-
-plot(density(obs.r), col = "red", xlim = c(0,1))
-lines(density(null.r1))
-
-
-n = 1e6
-garibaldi_north <- rbeta(n, 16, 2438) # fraction of G relative to L, northside
-garibaldi_south <- rbeta(n, 3, 3113) # fraction of G relative to L, southside
-south_v_north <- garibaldi_south/garibaldi_north # ratio on south vs north
-quantile(south_v_north, probs = c(0.025, 0.975))
-
-plot(density(garibaldi_north), col = "red", xlim = c(-0.015,0.015))
-lines(density(garibaldi_south))
-lines(density(south_v_north), col = "blue")
-p_value <- sum(south_v_north >= 1) / n
-print(p_value)
-
-
-## Get top khan 
-top.proposal <- test.run[["top"]]
-fitness.proposal <- test.run[["fitness"]][1,]
-
-khan <- top.proposal %>% dplyr::filter(gen == fitness.proposal$gen,
-                                       n == fitness.proposal$n)
-```
-
-
-
-
-
-
-
-
-#################################
-## Code not used ################
-#################################
-Download GWAS summary stat data for BRCA from most recent paper
-```{r}
-## Using table downloaded from gwas summary statistic
-## https://www.ebi.ac.uk/gwas//api/search/summaryStatistics/download
-gwas_ss <- fread(file = "/drive-pool/data/peter_data/genetic_programming/gwas/list_gwas_summary_statistics.tsv") %>%
-  dplyr::rename("traits" = "Trait(s)") ## Rename Trait(s) as traits
-
-phenotype <- data.frame(traits = unique(gwas_ss$traits))
-b.phenotype <- phenotype$traits[grep(pattern = "breast", x = phenotype$traits)]
-brca <- b.phenotype[c(3,4,5)]; rm(b.phenotype, phenotype)
-
-b_gwas_ss <- gwas_ss %>% dplyr::filter(traits %in% brca); rm(gwas_ss, brca) 
-## Chose PMID 34662886 b/c it was one of the most recent papers and had the most samples and variants analyzed.
-
-## Download summary stat from http://ftp.ebi.ac.uk/pub/databases/gwas/summary_statistics/GCST90081001-GCST90082000/GCST90081349
-rm(b_gwas_ss); gc()
-ss <- read.table(file = "/drive-pool/data/peter_data/genetic_programming/gwas/brca/GCST90079129_buildGRCh38.tsv.gz",
-                 header = TRUE) %>% 
-  dplyr::filter(p_value <= 0.05)
-
-## Consolidate snps into loci - finding the lead snp
-signif.snps <- ss %>% dplyr::select(Name, chromosome, base_pair_location) %>%
-  'colnames<-' (c("SNP_id", "seqnames", "start"))
-
-snps.list <- as.list(as.data.frame(t(signif.snps)))
-
-signif.snps$cytoband <- unlist(mclapply(X = snps.list, FUN = function(x) {
-  chrom_id <- as.numeric(x[2])
-  if(chrom_id == 23) {
-    chrom_id <- "X"
-  }
-  quantsmooth::position2Cytoband(chrom = chrom_id, 
-                                 position = as.numeric(x[3]), 
-                                 units = "hg38")
-},
-mc.cores = 10
-))
-
-rm(snps.list)
-## Append pval to signif snps
-signif.snps <- signif.snps %>% left_join(x = ., y = gwas.snps[, c("SNPS", "P-VALUE")], by = c("SNP_id"="SNPS")) %>%
-  distinct() %>% rownames_to_column(var = "rowid") %>%
-  dplyr::rename("pval"="P-VALUE")
-```
 
