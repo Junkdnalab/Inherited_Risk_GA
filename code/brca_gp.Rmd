@@ -1080,7 +1080,7 @@ result <- merge(geneframe, cellframe, by = "locus") %>%
 #result %>% dplyr::filter(Freq.x >= 700, Freq.y >= 700) %>% .[order(desc(.$Freq.x), desc(.$Freq.y)),]
 #write.table(x = result, file = "~/summ.confidcall.txt", quote = FALSE, row.names = FALSE)
 
-fitness.allgen <- as.data.frame(do.call(rbind, test.run[1:150]))
+fitness.allgen <- as.data.frame(do.call(rbind, test.run[1:100]))
 
 gp.plotdata <- fitness.allgen %>% gather(data = ., key = "method", value = "fraction", -n, -gen)
 unique(gp.plotdata$method)
@@ -1091,8 +1091,8 @@ ggplot(data = gp.plotdata, aes(x = gen, y = fraction)) +
   theme_minimal() +
   xlab("Generations") + ylab("Fraction of Hits") +
   facet_wrap(.~method, scale = "free") +
-  ggtitle("Genetic Programming: Progressive Sampling Summary - Breast (Scaled)") +
-  scale_x_continuous(breaks = seq(0, 150, by = 25))
+  ggtitle("Genetic Programming: Lexicase Sampling Summary - Breast") +
+  scale_x_continuous(breaks = seq(0, 100, by = 25))
 
 ggsave(filename = "~/brca_gp_progressive_summary_200kb_50gen_071223_updatedmarkers.png", width = 20, height = 7)
 

@@ -109,7 +109,7 @@ save_pheatmap_pdf <- function(x, filename, width=7, height=7) {
 #########################
 #########################
 
-gwas_gp <- function(init.proposal, generations, obj.fun, exclude.celltype = c("ERGpos_Tumor", "ERGneg_Tumor"), khan.method) {
+gwas_gp <- function(init.proposal, generations, obj.fun, exclude.celltype = c("ERGpos_Tumor", "ERGneg_Tumor"), khan.method, selection.method) {
   ## Store result for fitness function
   fitness.res.list <- list() 
   ## Store initial proposal as df
@@ -181,11 +181,11 @@ gwas_gp <- function(init.proposal, generations, obj.fun, exclude.celltype = c("E
       obj.fun.res[["magma"]] <- as.data.frame(magma.obj)
     }
     
-    if("hi.mut" %in% obj.fun) {
+    if("cancer.gene" %in% obj.fun) {
       hi.mut.obj <- df %>% left_join(x = ., y = breast.cancer.gene, by = "gene") %>%
         mutate(cancer.gene = replace_na(cancer.gene, replace = 0)) %>% 
         dplyr::group_by(n) %>% dplyr::summarise(cancer.gene = sum(cancer.gene) / length(cancer.gene))
-      obj.fun.res[["hi.mut"]] <- as.data.frame(hi.mut.obj)
+      obj.fun.res[["cancer.gene"]] <- as.data.frame(hi.mut.obj)
     }
     
     ############################
@@ -437,7 +437,7 @@ gwas_gp <- function(init.proposal, generations, obj.fun, exclude.celltype = c("E
     }
     ########################
     ## lncrna interaction ##
-    if("lncrna.ppi" %in% obj.fun) {
+    if("lncrna" %in% obj.fun) {
       lncrna.obj <- mclapply(X = as.list(unique(df$n)), FUN = function(x) {
         ## Get info on proposal
         proposal.set <- df %>% dplyr::filter(n == x) %>% dplyr::select(-n)
@@ -468,7 +468,7 @@ gwas_gp <- function(init.proposal, generations, obj.fun, exclude.celltype = c("E
       lncrna.res <- data.frame(n = unique(df$n)) %>%
         left_join(x = ., y = all.lncrna.obj, by = "n") %>%
         mutate(lncrna = replace_na(lncrna, replace = 0))
-      obj.fun.res[["lncrna.ppi"]] <- lncrna.res
+      obj.fun.res[["lncrna"]] <- lncrna.res
     } ## end of lncrna
     
     ######################
@@ -544,10 +544,9 @@ gwas_gp <- function(init.proposal, generations, obj.fun, exclude.celltype = c("E
     })
     fitness.obj$gen <- generation - 1 
     
+    ######################################
+    ## Rank the proposals into 5 groups ##
     
-    ##########
-    ## Rank ##
-    ## Rank the proposals into 5 groups
     ranked.proposals <- fitness.obj %>% dplyr::select(n, fitness) %>% arrange(., desc(fitness)) %>%
       mutate(quantile = rep(x = 5:1, each = nrow(.)/5))
     ## Prob of quantiles
@@ -574,7 +573,46 @@ gwas_gp <- function(init.proposal, generations, obj.fun, exclude.celltype = c("E
     
     ###################################
     ## Randomly Select 100 Proposals ##
-    sel.proposal <- progressive_quantile(group.prob = group.prob, n_proposal = 1e2, proposal = ranked.proposals)
+    
+    if("progressive" %in% selection.method) {
+      
+      ## Select 100 parents based on progressive scale
+      sel.proposal <- progressive_quantile(group.prob = group.prob, n_proposal = 1e2, proposal = ranked.proposals)
+    }
+    
+    if("lexicase" %in% selection.method) {
+      sel.proposal <- list()
+      
+      for(lexicase.run in seq(1e2)) { ## Find 100 parents
+        shuff.of <- sample(x = obj.fun, size = length(obj.fun), replace = FALSE) ## Shuffle obj func
+        pool <- fitness.obj ## Store fitness.obj as pool 
+        shuff.counter <- 1 ## Counter used for moving through the shuff.of
+        while(nrow(pool) > 0 & shuff.counter <= length(shuff.of)) { ## While pool is greater than 0 and shuff.counter less than shuff.of
+          message(paste0("Working on parent ", lexicase.run, ": Shuffle OF ", shuff.counter, " is ", shuff.of[[shuff.counter]]), ". Pool is ", nrow(pool))
+          col.index <- which(colnames(pool) == shuff.of[[shuff.counter]])
+          max.score <- pool %>% pull(shuff.of[[shuff.counter]]) %>% max() 
+          pool <- pool %>% filter_at(col.index, all_vars(. == max.score)) 
+          
+          ## If only one parent then stop selection
+          if(nrow(pool) == 1) { 
+            sel.proposal[[lexicase.run]] <- pool %>% dplyr::select(n, gen)
+            message(paste0("Parent ", lexicase.run, " found. Only one left. Stopped at shuff.counter ", shuff.counter))
+            break
+          } else if(nrow(pool) > 1) { ## If pool is still greater than 1
+            if(shuff.counter == length(shuff.of)) {
+              sel.proposal[[lexicase.run]] <- pool %>% .[sample(x = seq(nrow(keep.pool)), size = 1),] %>% dplyr::select(n, gen)
+              message(paste0("Parent ", lexicase.run, " found. More than one. Random select Stopped at shuff.counter ", shuff.counter))
+            } else {
+              shuff.counter <- shuff.counter + 1
+            }
+          } 
+        } ## end of while loop
+      } ## end of lexicase selection
+      sel.proposal <- as.data.frame(do.call(rbind, sel.proposal)) ## Process parent selection result
+      sel.proposal <- sel.proposal %>% left_join(x = ., y = ranked.proposals, by = "n") %>% dplyr::select(-gen)
+    } ## end of lexicase function
+    
+    
     
     ############
     ## Mating ##
@@ -691,11 +729,11 @@ gwas_gp_no_omics <- function(init.proposal, generations, obj.fun, exclude.cellty
       obj.fun.res[["magma"]] <- as.data.frame(magma.obj)
     }
     
-    if("hi.mut" %in% obj.fun) {
+    if("cancer.gene" %in% obj.fun) {
       hi.mut.obj <- df %>% left_join(x = ., y = breast.cancer.gene, by = "gene") %>%
         mutate(cancer.gene = replace_na(cancer.gene, replace = 0)) %>% 
         dplyr::group_by(n) %>% dplyr::summarise(cancer.gene = sum(cancer.gene) / length(cancer.gene))
-      obj.fun.res[["hi.mut"]] <- as.data.frame(hi.mut.obj)
+      obj.fun.res[["cancer.gene"]] <- as.data.frame(hi.mut.obj)
     }
     
     ############################
@@ -1905,10 +1943,10 @@ get.of.hits <- function(data, obj.fun) { ## Data is df of locus, gene and cell t
   
   ##########################
   ## Highly mutated genes ##
-  if("hi.mut" %in% obj.fun) {
+  if("cancer.gene" %in% obj.fun) {
     hi.mut.obj <- data %>% left_join(x = ., y = breast.cancer.gene, by = "gene") %>%
       mutate(cancer.gene = replace_na(cancer.gene, replace = 0))
-    obj.fun.hit[["hi.mut"]] <- as.data.frame(hi.mut.obj)
+    obj.fun.hit[["cancer.gene"]] <- as.data.frame(hi.mut.obj)
   } ## End of hi mut
   
   ############################
@@ -2059,7 +2097,7 @@ get.of.hits <- function(data, obj.fun) { ## Data is df of locus, gene and cell t
   
   ########################
   ## lncrna interaction ##
-  if("lncrna.ppi" %in% obj.fun) {
+  if("lncrna" %in% obj.fun) {
     ## Match proposal elements with ppi
     match.set <- rna.protein.map %>% left_join(x = ., y = data, by = c("gene1"="gene"),
                                                relationship = "many-to-many") %>%
@@ -2078,7 +2116,7 @@ get.of.hits <- function(data, obj.fun) { ## Data is df of locus, gene and cell t
         mutate(lncrna = replace_na(lncrna, replace = 0))
     }
     
-    obj.fun.hit[["lncrna.ppi"]] <- lncrna.res
+    obj.fun.hit[["lncrna"]] <- lncrna.res
   } ## end of lncrna
   
   ## Combine the obj.fun.hit together 
