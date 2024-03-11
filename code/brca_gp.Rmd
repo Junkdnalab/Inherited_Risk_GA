@@ -937,8 +937,8 @@ str.db.link <- str.db.link %>% dplyr::select(protein1, protein2, experiments,
   .[,c("protein1", "protein2", "gene1", "gene2", "experiments", "experiments_transferred", "combined_score")]
 
 ppi <- str.db.link %>% dplyr::select(gene1, gene2) %>%
-  dplyr::filter(gene1 %in% map.genes$gene_name, 
-                gene2 %in% map.genes$gene_name) %>% ## Filter for specific genes found in gwas 200kb
+  dplyr::filter(gene1 %in% nearbygenes$gene_name, 
+                gene2 %in% nearbygenes$gene_name) %>% ## Filter for specific genes found in gwas 200kb
   group_by(grp = paste(pmax(gene1, gene2), pmin(gene1, gene2), sep = "_")) %>%
   dplyr::filter(row_number() == 1) %>%
   ungroup() %>%
@@ -1039,9 +1039,10 @@ save(multi.gp, file = "/drive-pool/data/peter_data/genetic_programming/code/brca
 # load("/drive-pool/data/peter_data/genetic_programming/code/brca/multi.run_nobreastmultiomics_013124.rda")
 # load("/drive-pool/data/peter_data/genetic_programming/code/brca/multi.run_021624.rda")
 # load("/drive-pool/data/peter_data/genetic_programming/code/brca/breast_multi.run_nobreastmultiomics_022024.rda")
-load("/drive-pool/data/peter_data/genetic_programming/code/brca/breast_multi.run_022624.rda")
+load("/drive-pool/data/peter_data/genetic_programming/code/brca/lexicase_breast_multi.run_030724.rda")
+load("/drive-pool/data/peter_data/genetic_programming/code/brca/progressive_ctrl_multi.run_030824")
 
-test.run <- multi.gp[[3]]
+test.run <- multi.gp[[1]]
 #test.run <- ga.run
 top.proposal <- test.run[["proposal"]]
 loci <- 206
@@ -1091,13 +1092,13 @@ ggplot(data = gp.plotdata, aes(x = gen, y = fraction)) +
   theme_minimal() +
   xlab("Generations") + ylab("Fraction of Hits") +
   facet_wrap(.~method, scale = "free") +
-  ggtitle("Genetic Programming: Lexicase Sampling Summary - Breast") +
+  ggtitle("Genetic Programming: Progressive Sampling Summary - Ctrl") +
   scale_x_continuous(breaks = seq(0, 100, by = 25))
 
 ggsave(filename = "~/brca_gp_progressive_summary_200kb_50gen_071223_updatedmarkers.png", width = 20, height = 7)
 
-result %>% dplyr::filter(Freq.x >= 700,
-                         Freq.y >= 700)
+result %>% dplyr::filter(Freq.x >= 7000,
+                         Freq.y >= 7000)
 
 ## Elite comparison with last gen
 elite <- test.run[["top"]] %>%

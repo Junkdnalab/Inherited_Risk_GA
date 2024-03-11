@@ -17,26 +17,26 @@ progressive_quantile <- function(group.prob, n_proposal, proposal) {
   ## Probabilistic
   ## Sample row number based on probs of ranked df
   rand.proposal <- sample(x = 1:nrow(proposal), ## Proposal should be ranked high to low
-                          size = 100, ## Select 100 random proposals based on the prob below
+                          size = n_proposal, ## Select 100 random proposals based on the prob below
                           prob = rep(rev(group.prob), each = nrow(proposal)/5))
   proposal <- proposal[rand.proposal,]
   }
 
-mating.pair <- function(sel.proposal, n.pairs = 100, n_proposal = 1000, df, khan.method, fitness.df, top.df, generation, n.loci) {
+mating.pair <- function(sel.proposal, n.pairs, n_proposal, df, khan.method, fitness.df, top.df, generation, n.loci) {
   if(khan.method == TRUE) {
     ## Get khan info
     khan <- fitness.df[1,] ## Which gen and proposal is khan?
     khan.df <- top.df %>% dplyr::filter(n == khan$n, ## Get khan proposals
                                         gen == khan$gen) %>%
       dplyr::select(-gen) %>%
-      mutate(n = 1000 + generation)
+      mutate(n = n_proposal + generation)
     ############################
     ## Preparing proposal set ##
     ## Get row.num of random group 5 to kick out
     rand.kick <- sel.proposal %>% rownames_to_column(var = "row") %>% dplyr::filter(quantile == 5) %>% slice_sample(n = 1) %>% .$row
     proposal.set <- sel.proposal %>% dplyr::filter(rownames(.) != rand.kick)
     ## Add khan into proposal set
-    khan <- khan %>% dplyr::rename("quantile"="gen") %>% mutate(n = 1000 + generation)
+    khan <- khan %>% dplyr::rename("quantile"="gen") %>% mutate(n = n_proposal + generation)
     proposal.set <- rbind(khan, proposal.set)
     ######################
     ## Preparing df set ##
@@ -64,7 +64,7 @@ mating.pair <- function(sel.proposal, n.pairs = 100, n_proposal = 1000, df, khan
     }
     child.list <- as.data.frame(do.call(rbind, child.list))
   },
-  mc.cores = 10
+  mc.cores = 20
   )
 }
 
@@ -79,7 +79,7 @@ add.mutations <- function(new.proposal, mut.rate = 0.05) {
   loci.gene.sample <- mclapply(X = as.list(mutated.loci), FUN = function(x) {
     new.gene <- loci2gene %>% dplyr::filter(cytoband == x) %>% slice_sample(n = 1) %>% dplyr::rename("gene"="gene_name")
   },
-  mc.cores = 10)
+  mc.cores = 60)
   loci.gene.sample <- as.data.frame(do.call(rbind, loci.gene.sample))
   gene <- loci2gene %>% dplyr::filter(cytoband %in% mutated.loci)
   new.proposal[which(gene.mutation ==1), "gene"] <- loci.gene.sample$gene
@@ -109,7 +109,7 @@ save_pheatmap_pdf <- function(x, filename, width=7, height=7) {
 #########################
 #########################
 
-gwas_gp <- function(init.proposal, generations, obj.fun, exclude.celltype = c("ERGpos_Tumor", "ERGneg_Tumor"), khan.method, selection.method) {
+gwas_gp <- function(init.proposal, generations, obj.fun, exclude.celltype = c("ERGpos_Tumor", "ERGneg_Tumor"), khan.method, selection.method, proposal.size, parent.size) {
   ## Store result for fitness function
   fitness.res.list <- list() 
   ## Store initial proposal as df
@@ -204,7 +204,7 @@ gwas_gp <- function(init.proposal, generations, obj.fun, exclude.celltype = c("E
           na.omit() %>%
           mutate(n = x) 
         
-      }, mc.cores = 10)
+      }, mc.cores = 60)
       ppi.obj <- as.data.frame(do.call(rbind, ppi.obj))
       
       if("intra.ppi" %in% obj.fun) {
@@ -233,7 +233,7 @@ gwas_gp <- function(init.proposal, generations, obj.fun, exclude.celltype = c("E
             intra.res <- data.frame(n = x,
                                     intra.ppi = 0)
           }
-        }, mc.cores = 10)
+        }, mc.cores = 60)
         intra.obj <- as.data.frame(do.call(rbind, intra.obj))
         obj.fun.res[["intra.ppi"]] <- intra.obj
       } ## End of intra ppi
@@ -248,7 +248,7 @@ gwas_gp <- function(init.proposal, generations, obj.fun, exclude.celltype = c("E
             mutate(ppi = replace_na(ppi, replace = 0)) %>%
             dplyr::summarise(ppi = sum(ppi) / length(ppi)) %>%
             mutate(n = x) %>% .[, c("n", "ppi")]
-        }, mc.cores = 10)
+        }, mc.cores = 60)
         all.ppi.obj <- as.data.frame(do.call(rbind, all.ppi.obj))
         ppi.res <- data.frame(n = unique(df$n), 
                               ppi = 0)
@@ -279,7 +279,7 @@ gwas_gp <- function(init.proposal, generations, obj.fun, exclude.celltype = c("E
               mutate(marker.ppi = replace_na(marker.ppi, replace = 0)) %>%
               dplyr::summarise(marker.ppi = sum(marker.ppi) / length(marker.ppi)) %>%
               mutate(n = x) %>% .[, c("n", "marker.ppi")]
-          }, mc.cores = 10)
+          }, mc.cores = 60)
           marker.ppi.obj <- as.data.frame(do.call(rbind, marker.ppi.obj))
           
           marker.ppi.obj <- data.frame(n = unique(df$n)) %>%
@@ -347,7 +347,7 @@ gwas_gp <- function(init.proposal, generations, obj.fun, exclude.celltype = c("E
               mutate(inter.ppi = replace_na(inter.ppi, replace = 0)) %>%
               dplyr::summarise(inter.ppi = sum(inter.ppi) / length(inter.ppi)) %>%
               mutate(n = x) %>% .[, c("n", "inter.ppi")]
-          }, mc.cores = 10)
+          }, mc.cores = 60)
           inter.ppi.obj <- as.data.frame(do.call(rbind, inter.ppi.obj)) 
           
           if(nrow(inter.ppi.obj) == 0) {
@@ -374,7 +374,7 @@ gwas_gp <- function(init.proposal, generations, obj.fun, exclude.celltype = c("E
             tally() %>% ## ## Count up how many times the set appears
             dplyr::filter(n > 1) %>% nrow() ## Select gene locus combination with more than one interaction
           res <- data.frame(n = x, multi.ppi = gene.locus.set / n.loci)
-        }, mc.cores = 10)
+        }, mc.cores = 60)
         multi.res <- as.data.frame(do.call(rbind, multi.res))
         obj.fun.res[["multi.ppi"]] <- multi.res
       } ## End of multi.ppi
@@ -401,7 +401,7 @@ gwas_gp <- function(init.proposal, generations, obj.fun, exclude.celltype = c("E
             mutate(go.cc = replace_na(go.cc, replace = 0)) %>%
             dplyr::summarise(go.cc = sum(go.cc) / length(go.cc)) %>%
             mutate(n = x) %>% .[, c("n", "go.cc")]
-        }, mc.cores = 10)
+        }, mc.cores = 60)
         go.ppi.obj <- as.data.frame(do.call(rbind, go.ppi.obj))
         
         obj.fun.res[["go.cc.ppi"]] <- go.ppi.obj
@@ -450,7 +450,7 @@ gwas_gp <- function(init.proposal, generations, obj.fun, exclude.celltype = c("E
           dplyr::rename("celltype2"="celltype", "locus2"="locus") %>% 
           na.omit() %>%
           mutate(n = x)
-      }, mc.cores = 10)
+      }, mc.cores = 60)
       lncrna.obj <- as.data.frame(do.call(rbind, lncrna.obj))
       
       all.lncrna.obj <- mclapply(X = as.list(unique(lncrna.obj$n)), FUN = function(x) {
@@ -462,7 +462,7 @@ gwas_gp <- function(init.proposal, generations, obj.fun, exclude.celltype = c("E
           mutate(lncrna = replace_na(lncrna, replace = 0)) %>%
           dplyr::summarise(lncrna = sum(lncrna) / length(lncrna)) %>%
           mutate(n = x) %>% .[, c("n", "lncrna")]
-      }, mc.cores = 10)
+      }, mc.cores = 60)
       all.lncrna.obj <- as.data.frame(do.call(rbind, all.lncrna.obj))
       
       lncrna.res <- data.frame(n = unique(df$n)) %>%
@@ -490,7 +490,7 @@ gwas_gp <- function(init.proposal, generations, obj.fun, exclude.celltype = c("E
           dplyr::select(celltype, locus, gene, n, tfbs) %>%
           dplyr::ungroup() 
         
-      }, mc.cores = 10)
+      }, mc.cores = 60)
       tfbs.obj <- as.data.frame(do.call(rbind, tfbs.obj))
       tfbs.obj <- tfbs.obj %>% dplyr::group_by(n) %>% dplyr::summarise(tfbs = sum(tfbs)/length(tfbs))
       obj.fun.res[["tfbs"]] <- tfbs.obj
@@ -523,7 +523,7 @@ gwas_gp <- function(init.proposal, generations, obj.fun, exclude.celltype = c("E
           dplyr::group_by(n) %>%
           dplyr::summarise(tfbs = sum(tf.hit)/length(tf.hit))
           
-      }, mc.cores = 10)
+      }, mc.cores = 60)
       tfbs.marker.obj <- as.data.frame(do.call(rbind, tfbs.marker.obj))
     }
     
@@ -577,13 +577,13 @@ gwas_gp <- function(init.proposal, generations, obj.fun, exclude.celltype = c("E
     if("progressive" %in% selection.method) {
       
       ## Select 100 parents based on progressive scale
-      sel.proposal <- progressive_quantile(group.prob = group.prob, n_proposal = 1e2, proposal = ranked.proposals)
+      sel.proposal <- progressive_quantile(group.prob = group.prob, n_proposal = parent.size, proposal = ranked.proposals)
     }
     
     if("lexicase" %in% selection.method) {
       sel.proposal <- list()
       
-      for(lexicase.run in seq(1e2)) { ## Find 100 parents
+      for(lexicase.run in seq(parent.size)) { ## Find parents based on parent.size
         shuff.of <- sample(x = obj.fun, size = length(obj.fun), replace = FALSE) ## Shuffle obj func
         pool <- fitness.obj ## Store fitness.obj as pool 
         shuff.counter <- 1 ## Counter used for moving through the shuff.of
@@ -600,8 +600,9 @@ gwas_gp <- function(init.proposal, generations, obj.fun, exclude.celltype = c("E
             break
           } else if(nrow(pool) > 1) { ## If pool is still greater than 1
             if(shuff.counter == length(shuff.of)) {
-              sel.proposal[[lexicase.run]] <- pool %>% .[sample(x = seq(nrow(keep.pool)), size = 1),] %>% dplyr::select(n, gen)
+              sel.proposal[[lexicase.run]] <- pool %>% .[sample(x = seq(nrow(pool)), size = 1),] %>% dplyr::select(n, gen)
               message(paste0("Parent ", lexicase.run, " found. More than one. Random select Stopped at shuff.counter ", shuff.counter))
+              break
             } else {
               shuff.counter <- shuff.counter + 1
             }
@@ -616,10 +617,10 @@ gwas_gp <- function(init.proposal, generations, obj.fun, exclude.celltype = c("E
     
     ############
     ## Mating ##
-    new.proposal <- mating.pair(sel.proposal = sel.proposal, df = df, khan.method = khan.method, fitness.df = fitness.df, top.df = top.df,
+    new.proposal <- mating.pair(sel.proposal = sel.proposal, n_proposal = proposal.size, n.pairs = parent.size, df = df, khan.method = khan.method, fitness.df = fitness.df, top.df = top.df,
                                 generation = generation, n.loci = n.loci)
     new.proposal <- as.data.frame(do.call(rbind,new.proposal)) %>% remove_rownames() %>%
-      mutate(n = rep(1:1000, each = n.loci))
+      mutate(n = rep(1:proposal.size, each = n.loci))
     ##############
     ## Mutation ##
     new.proposal <- add.mutations(new.proposal = new.proposal)
@@ -632,7 +633,7 @@ gwas_gp <- function(init.proposal, generations, obj.fun, exclude.celltype = c("E
     khan.df <- top.df %>% dplyr::filter(n == khan$n, ## Get khan proposals
                                         gen == khan$gen) %>%
       dplyr::select(-gen) %>%
-      mutate(n = 1000 + generation)
+      mutate(n = proposal.size + generation)
     
     new.proposal <- rbind(khan.df, new.proposal)
     

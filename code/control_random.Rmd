@@ -893,8 +893,8 @@ str.db.link <- str.db.link %>% dplyr::select(protein1, protein2, experiments,
   .[,c("protein1", "protein2", "gene1", "gene2", "experiments", "experiments_transferred", "combined_score")]
 
 ppi <- str.db.link %>% dplyr::select(gene1, gene2) %>%
-  dplyr::filter(gene1 %in% map.genes$gene_name, 
-                gene2 %in% map.genes$gene_name) %>% ## Filter for specific genes found in gwas 200kb
+  dplyr::filter(gene1 %in% nearbygenes$gene_name, 
+                gene2 %in% nearbygenes$gene_name) %>% ## Filter for specific genes found in gwas 200kb
   group_by(grp = paste(pmax(gene1, gene2), pmin(gene1, gene2), sep = "_")) %>%
   dplyr::filter(row_number() == 1) %>%
   ungroup() %>%
