@@ -579,6 +579,120 @@ gwas_gp <- function(init.proposal, generations, obj.fun, khan.method, selection.
       obj.fun.res[["htftarget"]] <- htftarget.obj
     }
     
+     #################
+    ## Tfbs.marker ## If tf is a proposal gene and has tf disruption. Score 1 for all cases 
+    if("tfbs.marker" %in% obj.fun) {
+      tfbs.marker.obj <- mclapply(X = as.list(unique(df$n)), FUN = function(x) {
+        ## Get info on proposal
+        proposal.set <- df %>% dplyr::filter(n == x) %>% dplyr::select(-n)
+        ## Match proposal elements with TF expressed data
+        proposal.set <- ct_exp %>% mutate(tfbs.marker = 1) %>% 
+          left_join(x = proposal.set, y = ., by = c("gene"="gene_name", "celltype"="type")) %>%
+          mutate(tfbs.marker = replace_na(tfbs.marker, replace = 0))
+        
+        ## If there are any TF expressed in correct cell type then add in motifbreakR info
+        if(any(proposal.set$tfbs.marker == 1)) {
+          ## What tf.gene are a hit
+          tf.genes <- proposal.set %>% dplyr::filter(tfbs.marker == 1) %>% pull(gene)
+          ## What SNPs have motif broken?
+          for(tf.gene in tf.genes) {
+            tfbs.disrupt <- mb.tfbs.disrupt %>% dplyr::filter(geneSymbol %in% tf.gene)
+            ## Now add a point for all lead SNPs with a MB disruption for that tf.gene
+            for(tfbs in unique(tfbs.disrupt$LEAD_SNP)) {
+              proposal.set[which(proposal.set$locus == tfbs), "tfbs.marker"] <- 1
+            }
+          }
+        } ## end of IF condition 
+        proposal.set <- proposal.set %>% mutate(n = x) %>% ## add back generation info
+          dplyr::select(celltype, locus, gene, n, tfbs.marker) %>%
+          dplyr::group_by(n) %>%
+          dplyr::summarise(tfbs.marker = sum(tfbs.marker)/length(tfbs.marker))
+          
+      }, mc.cores = n.cores)
+      tfbs.marker.obj <- as.data.frame(do.call(rbind, tfbs.marker.obj)) ## list to dataframe the result
+      ## Store res in list
+      obj.fun.res[["tfbs.marker"]] <- tfbs.marker.obj
+    }
+    
+    ##################################
+    ## htftarget objective function ##
+    
+    if("htftarget" %in% obj.fun) {
+      htftarget.obj <- mclapply(X = as.list(unique(df$n)), FUN = function(x) {
+        ## Get info on proposal
+        proposal.set <- df %>% dplyr::filter(n == x) %>% dplyr::select(-n) %>%
+          left_join(x = ., y = distinct(breast.htftarget[,c("TF", "htftarget")]), by = c("gene"="TF")) %>%
+          mutate(htftarget = replace_na(htftarget, replace = 0))
+        ## If TF gene is present
+        if(any(proposal.set$htftarget == 1)) {
+          tf.target.hit <- proposal.set %>% dplyr::filter(htftarget == 1) %>% pull(gene) ## what TF are present
+          filtered.tftarget <- breast.htftarget %>% dplyr::filter(TF %in% tf.target.hit) ## filter tftarget for hits
+          
+          if(any(unique(filtered.tftarget$target) %in% unique(proposal.set$gene))) { ## If TF target genes are present
+            proposal.set <- proposal.set %>% left_join(x = ., y = unique(filtered.tftarget[,c("target","htftarget")]), by = c("gene"="target")) %>%
+              mutate(htftarget.x = replace_na(htftarget.x, replace = 0),
+                     htftarget.y = replace_na(htftarget.y, replace = 0),
+                     htftarget = htftarget.x + htftarget.y) %>%
+              dplyr::select(-htftarget.x, -htftarget.y)
+            
+          } else { ## If TF target gene not present... set htftarget gene to 0 cause no criteria satisfied
+            proposal.set$htftarget <- 0
+          }
+          ## Calculate score
+          proposal.set <- proposal.set %>% dplyr::summarise(htftarget = sum(htftarget) / length(htftarget)) %>%
+            mutate(n = x) %>% .[, c("n", "htftarget")]
+          
+        } else { ## If TF gene not present
+          proposal.set <- data.frame(n = x,
+                                     htftarget = 0)
+        }
+        
+      }, mc.cores = n.cores)
+      
+      ## List to dataframe
+      htftarget.obj <- as.data.frame(do.call(rbind, htftarget.obj))
+      ## Store in list
+      obj.fun.res[["htftarget"]] <- htftarget.obj
+    }
+    
+      
+      #################################
+      ## mb.remap objective function ##
+      
+      if("mb.remap" %in% obj.fun) {
+        mb.remap.obj <- mclapply(X = as.list(unique(df$n)), FUN = function(x) {
+          ## Get info on proposal
+          proposal.set <- df %>% dplyr::filter(n == x) %>% dplyr::select(-n) %>%
+            left_join(x = ., y = distinct(mb.remap.df[,c("tf", "mb.remap")]), by = c("gene"="tf")) %>%
+            mutate(mb.remap = replace_na(mb.remap, replace = 0))
+          ## If TF gene is present
+          if(any(proposal.set$mb.remap == 1)) {
+            tf.remap.hit <- proposal.set %>% dplyr::filter(mb.remap == 1) %>% pull(gene) ## what TF are present
+            filtered.tfremap <- mb.remap.df %>% dplyr::filter(tf %in% tf.remap.hit) ## filter tftarget for hits
+            
+            proposal.set <- proposal.set %>% left_join(x = ., y = distinct(filtered.tfremap[,c("snp","mb.remap")]), by = c("locus"="snp")) %>%
+                mutate(mb.remap.x = replace_na(mb.remap.x, replace = 0),
+                       mb.remap.y = replace_na(mb.remap.y, replace = 0),
+                       mb.remap = mb.remap.x + mb.remap.y) %>%
+                dplyr::select(-mb.remap.x, -mb.remap.y)
+              
+            ## Calculate score
+            proposal.set <- proposal.set %>% dplyr::summarise(mb.remap = sum(mb.remap) / length(mb.remap)) %>%
+              mutate(n = x) %>% .[, c("n", "mb.remap")]
+            
+          } else { ## If TF gene not present
+            proposal.set <- data.frame(n = x,
+                                       mb.remap = 0)
+          }
+          
+        }, mc.cores = n.cores)
+      
+      ## List to dataframe
+      mb.remap.obj <- as.data.frame(do.call(rbind, mb.remap.obj))
+      ## Store in list
+      obj.fun.res[["mb.remap"]] <- mb.remap.obj
+    }
+    
     #####################################
     ## Fitness mean objective function ##
     
@@ -3155,8 +3269,9 @@ getOFmean <- function(data, type, omic) {
                      marker.atac = mean(marker.atac),
                      common.atac = mean(common.atac),
                      tfbs = mean(tfbs),
-                     tfbs.marker = mean(tfbs.marker),
+                     mb.tfexpress = mean(mb.tfexpress),
                      htftarget = mean(htftarget),
+                     mb.remap = mean(mb.remap),
                      fitness = mean(fitness)) %>%
     mutate(type = type,
            omic = omic)

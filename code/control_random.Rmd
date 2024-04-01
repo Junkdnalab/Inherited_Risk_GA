@@ -382,7 +382,7 @@ x <- sample(x = 1:3, size = 1)
 ctrl <- vs_controls[[x]] ## Select control
 rm(vs_controls, x); gc()
 
-data <- ctrl %>% dplyr::select(CHR, POS, LABEL) %>%
+data <- ctrl %>% ungroup() %>% dplyr::select(CHR, POS, LABEL) %>%
   dplyr::rename("CHR_ID"="CHR", "CHR_POS"="POS", "SNP_ID_CURRENT"="LABEL") %>%
   mutate(CHR_ID = paste0("chr", CHR_ID),
          SNP_ID_CURRENT = paste0(SNP_ID_CURRENT, "_", rownames(.))) %>%
@@ -425,13 +425,13 @@ rm.res <- data.frame(ncol = sapply(ldproxy_res, ncol)) %>% dplyr::filter(ncol ==
 #ldproxy_res <- ldproxy_res[!names(ldproxy_res) %in% rm.res]
 
 ldproxy_res <- as.data.frame(do.call(rbind, ldproxy_res)) %>% remove_rownames()
-save(ldproxy_res, file = "/drive-pool/data/peter_data/genetic_programming/code/brca/ctrl_snpLDproxy.rda")
+save(ldproxy_res, file = "/drive-pool/data/peter_data/genetic_programming/code/brca/ctrl_snpLDproxy_032724.rda")
 ```
 
 Get nearby genes based on lead SNPs and in LD
 ```{r}
 ## Load ctrl SNP
-load("/drive-pool/data/peter_data/genetic_programming/code/brca/ctrl_snpLDproxy.rda")
+load("/drive-pool/data/peter_data/genetic_programming/code/brca/ctrl_snpLDproxy_032724.rda")
 ## Filter ld proxy for snps with an R2 of 0.9 and MAF of 0.05 or greater
 ld <- ldproxy_res %>% dplyr::filter(R2 >= 0.6,
                                     Dprime >= 0.9) %>%
@@ -634,12 +634,12 @@ mc.cores = 20
 nearbygenes_10xgenomics <- as.data.frame(do.call(rbind, nearbygenes))
 ## Sometimes there are no more genes at the tail end of the chromosome. Those will come back as NA. Remove NAs
 nearbygenes_10xgenomics <- na.omit(nearbygenes_10xgenomics)
-save(nearbygenes_10xgenomics, file = "/drive-pool/data/peter_data/genetic_programming/ctrl_nearbygenes_200kb_notelmer_10xgenomic_with_LD.rda")
+save(nearbygenes_10xgenomics, file = "/drive-pool/data/peter_data/genetic_programming/ctrl_nearbygenes_200kb_notelmer_10xgenomic_with_LD_032724.rda")
 ```
 
 Generate obj function for control match
 ```{r}
-load("/drive-pool/data/peter_data/genetic_programming/ctrl_nearbygenes_200kb_notelmer_10xgenomic_with_LD.rda")
+load("/drive-pool/data/peter_data/genetic_programming/ctrl_nearbygenes_200kb_notelmer_10xgenomic_with_LD_032724.rda")
 nearbygenes <- nearbygenes_10xgenomics; rm(nearbygenes_10xgenomics); gc()
 
 #######################################################
