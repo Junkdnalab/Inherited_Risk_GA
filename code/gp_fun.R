@@ -508,38 +508,67 @@ gwas_gp <- function(init.proposal, generations, obj.fun, khan.method, selection.
     
      #################
     ## mb.tfexpress ## If tf is a proposal gene and has tf disruption. Score 1 for all cases 
+    ## What it does: SNP with strong MB with a remap peak. Also TF needs to be expressed in CT. TF must be a proposal gene.
+    ## Cell type does not need to be exact match, but both must have the TF expressed. L1 and L2 can be different cell type.
+    ## What it gives: Cell type calls and TF proposal gene
     if("mb.tfexpress" %in% obj.fun) {
-      tfbs.marker.obj <- mclapply(X = as.list(unique(df$n)), FUN = function(x) {
+      
+      mb.remap.ct <- mb.remap.df %>% left_join(x = ., y = ct_exp, by = c("tf"="gene_name"), relationship = "many-to-many") %>%
+        na.omit() %>% distinct()
+      ct.tf <- ct_exp %>% mutate(express = 1)
+      
+      mb.remap.tf.obj <- mclapply(X = as.list(unique(df$n)), FUN = function(x) {
         ## Get info on proposal
-        proposal.set <- df %>% dplyr::filter(n == x) %>% dplyr::select(-n)
-        ## Match proposal elements with TF expressed data
-        proposal.set <- ct_exp %>% mutate(tfbs.marker = 1) %>% 
-          left_join(x = proposal.set, y = ., by = c("gene"="gene_name", "celltype"="type")) %>%
-          mutate(tfbs.marker = replace_na(tfbs.marker, replace = 0))
+        ## Filter mb.remap.ct for tf genes in proposal hit
+        ## Needs to be correct cell type
+        proposal.tf <-  df %>% dplyr::filter(n == x) %>% dplyr::select(-n) %>%
+          left_join(x = ., y = ct.tf, by = c("gene"="gene_name", "celltype"="type")) %>%
+          mutate(express = replace_na(express, replace = 0))
         
-        ## If there are any TF expressed in correct cell type then add in motifbreakR info
-        if(any(proposal.set$tfbs.marker == 1)) {
-          ## What tf.gene are a hit
-          tf.genes <- proposal.set %>% dplyr::filter(tfbs.marker == 1) %>% pull(gene)
-          ## What SNPs have motif broken?
-          for(tf.gene in tf.genes) {
-            tfbs.disrupt <- mb.tfbs.disrupt %>% dplyr::filter(geneSymbol %in% tf.gene)
-            ## Now add a point for all lead SNPs with a MB disruption for that tf.gene
-            for(tfbs in unique(tfbs.disrupt$LEAD_SNP)) {
-              proposal.set[which(proposal.set$locus == tfbs), "tfbs.marker"] <- 1
-            }
+        ## Pull positive hit genes
+        tf.genes <- proposal.tf %>% dplyr::filter(express == 1) %>% pull(gene) %>% unique()
+        
+        ## Filter mb.remap.ct data for positive hits
+        filter.mb.remap.ct <- mb.remap.ct %>% dplyr::filter(tf %in% tf.genes)
+        
+        ## Add remap info
+        proposal.tf.remap <- proposal.tf %>% left_join(x = ., y = filter.mb.remap.ct, by = c("locus"="snp", "celltype"="type")) %>%
+          mutate(mb.remap = replace_na(mb.remap, replace = 0))
+        
+        ## Checking for complete sets: (1) tf proposal gene express and (2) locus 2 remap peak
+        for(tf.gene in tf.genes) {
+          print(tf.gene)
+          filtered.ptf.remap <- proposal.tf.remap %>% dplyr::filter(tf %in% tf.gene)
+          if(nrow(filtered.ptf.remap) > 0) { ## If there are remap peak hits then dont do anything
+            next
+          } else { ## If not then remove tf gene
+            rm.tf <- proposal.tf.remap %>% rownames_to_column(var = "rowid") %>%
+              dplyr::filter(gene %in% tf.gene,
+                            express == 1) %>%
+              pull(rowid) %>% as.numeric()
+            proposal.tf.remap[rm.tf, "express"] <- 0
           }
-        } ## end of IF condition 
-        proposal.set <- proposal.set %>% mutate(n = x) %>% ## add back generation info
-          dplyr::select(celltype, locus, gene, n, tfbs.marker) %>%
-          dplyr::group_by(n) %>%
-          dplyr::summarise(tfbs.marker = sum(tfbs.marker)/length(tfbs.marker))
-          
-      }, mc.cores = n.cores)
-      tfbs.marker.obj <- as.data.frame(do.call(rbind, tfbs.marker.obj)) ## list to dataframe the result
-      tfbs.marker.obj <- tfbs.marker.obj %>% dplyr::rename("mb.tfexpress"="tfbs.marker")
+          } ## end of for loop checking for complete sets
+        
+        ## Clean up data for processing
+        proposal.tf.remap <- proposal.tf.remap %>% dplyr::select(-tf) %>% distinct() %>%
+          mutate(mb.tfexpress = express + mb.remap) %>%
+          mutate(mb.tfexpress = case_when(mb.tfexpress > 0 ~ 1,
+                                          mb.tfexpress == 0 ~ 0)) %>%
+          dplyr::select(-express, -mb.remap)
+        
+        ## Summarize result
+        res.tf.remap <- proposal.tf.remap %>% dplyr::summarise(mb.tfexpress = sum(mb.tfexpress) / length(mb.tfexpress)) %>%
+          mutate(n = x) %>% .[, c("n", "mb.tfexpress")]
+        
+        }, ## end of mclapply function
+        mc.cores = n.cores)
+        
+      
+      ## List to dataframe
+      mb.remap.tf.obj <- as.data.frame(do.call(rbind, mb.remap.tf.obj)) ## list to dataframe the result
       ## Store res in list
-      obj.fun.res[["mb.tfexpress"]] <- tfbs.marker.obj
+      obj.fun.res[["mb.tfexpress"]] <- mb.remap.tf.obj
     }
     
     ##################################
@@ -583,35 +612,22 @@ gwas_gp <- function(init.proposal, generations, obj.fun, khan.method, selection.
       obj.fun.res[["htftarget"]] <- htftarget.obj
     }
       
-      #################################
-      ## mb.remap objective function ##
-      
-      if("mb.remap" %in% obj.fun) {
-        mb.remap.obj <- mclapply(X = as.list(unique(df$n)), FUN = function(x) {
-          ## Get info on proposal
-          proposal.set <- df %>% dplyr::filter(n == x) %>% dplyr::select(-n) %>%
-            left_join(x = ., y = distinct(mb.remap.df[,c("tf", "mb.remap")]), by = c("gene"="tf")) %>%
-            mutate(mb.remap = replace_na(mb.remap, replace = 0))
-          ## If TF gene is present
-          if(any(proposal.set$mb.remap == 1)) {
-            tf.remap.hit <- proposal.set %>% dplyr::filter(mb.remap == 1) %>% pull(gene) ## what TF are present
-            filtered.tfremap <- mb.remap.df %>% dplyr::filter(tf %in% tf.remap.hit) ## filter tftarget for hits
-            
-            proposal.set <- proposal.set %>% left_join(x = ., y = distinct(filtered.tfremap[,c("snp","mb.remap")]), by = c("locus"="snp")) %>%
-                mutate(mb.remap.x = replace_na(mb.remap.x, replace = 0),
-                       mb.remap.y = replace_na(mb.remap.y, replace = 0),
-                       mb.remap = mb.remap.x + mb.remap.y) %>%
-                dplyr::select(-mb.remap.x, -mb.remap.y)
-              
-            ## Calculate score
-            proposal.set <- proposal.set %>% dplyr::summarise(mb.remap = sum(mb.remap) / length(mb.remap)) %>%
-              mutate(n = x) %>% .[, c("n", "mb.remap")]
-            
-          } else { ## If TF gene not present
-            proposal.set <- data.frame(n = x,
-                                       mb.remap = 0)
-          }
-          
+    #################################
+    ## mb.remap objective function ## 
+    ## What it does: SNP with strong MB with a remap peak. Also TF needs to be expressed in CT
+    ## What it gives: Cell type calls
+    if("mb.remap" %in% obj.fun) {
+      ## Prep lookup table to add cell type info
+      mb.remap.ct <- mb.remap.df %>% left_join(x = ., y = ct_exp, by = c("tf"="gene_name"), relationship = "many-to-many") %>%
+        na.omit() %>% distinct()
+        
+      mb.remap.obj <- mclapply(X = as.list(unique(df$n)), FUN = function(x) {
+        ## Get info on proposal
+        proposal.set <- df %>% dplyr::filter(n == x) %>% dplyr::select(-n) %>%
+          left_join(x = ., y = distinct(mb.remap.ct[,c("snp","mb.remap","type")]), by = c("celltype"="type", "locus"="snp")) %>%
+          mutate(mb.remap = replace_na(mb.remap, replace = 0)) %>% 
+          dplyr::summarise(mb.remap = sum(mb.remap) / length(mb.remap)) %>%
+          mutate(n = x) %>% .[, c("n", "mb.remap")]
         }, mc.cores = n.cores)
       
       ## List to dataframe
