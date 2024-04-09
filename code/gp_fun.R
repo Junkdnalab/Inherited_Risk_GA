@@ -537,7 +537,6 @@ gwas_gp <- function(init.proposal, generations, obj.fun, khan.method, selection.
         
         ## Checking for complete sets: (1) tf proposal gene express and (2) locus 2 remap peak
         for(tf.gene in tf.genes) {
-          print(tf.gene)
           filtered.ptf.remap <- proposal.tf.remap %>% dplyr::filter(tf %in% tf.gene)
           if(nrow(filtered.ptf.remap) > 0) { ## If there are remap peak hits then dont do anything
             next
@@ -640,33 +639,52 @@ gwas_gp <- function(init.proposal, generations, obj.fun, khan.method, selection.
     ## remap.promoter objective function ## Identify gene pairs (TF and gene) where remap shows interaction
     
     if("remap.promoter" %in% obj.fun) {
+      
+      ## Prepare lookup table for remap peak and promoter gene
+      remap.promoter.lookup <- mb2p.df %>% left_join(x = ., y = exp.gene, by = c("promoter.gene"="gene_name"), relationship = "many-to-many") %>%
+        dplyr::rename("promoter.celltype"="type", "promoter.express"="express") %>%
+        left_join(x = ., y = exp.gene, by = c("remap.gene"="gene_name"), relationship = "many-to-many") %>%
+        dplyr::rename("remap.celltype"="type", "remap.express"="express") %>%
+        na.omit() %>%
+        distinct()
+      ## Only include cases where cell type between 2 cell type is the same
+      remap.promoter.lookup <- remap.promoter.lookup[which(remap.promoter.lookup$promoter.celltype == remap.promoter.lookup$remap.celltype),]
+      
       remap.p.obj <- mclapply(X = as.list(unique(df$n)), FUN = function(x) {
         ## Get info on proposal
         proposal.set <- df %>% dplyr::filter(n == x) %>% dplyr::select(-n)
         ## Match proposal elements with ppi
-        match.set <- mb2p.df %>% left_join(x = ., y = proposal.set, by = c("remap.gene"="gene"),
+        match.set <- remap.promoter.lookup %>% left_join(x = ., y = proposal.set, by = c("remap.gene"="gene", "remap.celltype"="celltype"),
                                        relationship = "many-to-many") %>%
-          na.omit() %>%
-          dplyr::rename("remap.celltype"="celltype", "remap.locus"="locus") %>%
-          left_join(x = ., y = proposal.set, by = c("promoter.gene"="gene"),
+          na.omit() %>% 
+          dplyr::rename("remap.locus"="locus") %>% 
+          left_join(x = ., y = proposal.set, by = c("promoter.gene"="gene", "promoter.celltype"="celltype"),
                     relationship = "many-to-many") %>%
-          dplyr::rename("promoter.celltype"="celltype", "promoter.locus"="locus") %>% 
+          dplyr::rename("promoter.locus"="locus") %>% 
           na.omit()
-        ## Make genelist for left_join with proposal.set
-        match.set.gene <- as.data.frame(c(unique(match.set$promoter.gene), unique(match.set$remap.gene))) %>%
-          'colnames<-' ("gene") %>%
-          mutate(mb.promoter = 1) %>%
-          distinct()
-        ## Left join data and count number of hits to divide by length of loci
-        remap.promoter <- proposal.set %>% left_join(x = ., y = match.set.gene, by = "gene") %>%
-          mutate(mb.promoter = replace_na(mb.promoter, replace = 0)) %>%
-          dplyr::summarise(mb.promoter = sum(mb.promoter) / length(mb.promoter)) %>%
-          mutate(n = x) %>% .[, c("n", "mb.promoter")] %>% 
-          dplyr::rename("remap.promoter"="mb.promoter")
+        
+        if(nrow(match.set) == 0) { ## If no remap.promoter pairs then do the following
+          remap.p.res <- data.frame(n = x,
+                                    remap.promoter = 0)
+        } else {
+          remap.col <- match.set %>% dplyr::select(remap.locus, remap.gene, remap.celltype) %>%
+            'colnames<-' (c("locus", "gene", "celltype"))
+          promoter.col <- match.set %>% dplyr::select(promoter.locus, promoter.gene, promoter.celltype) %>%
+            'colnames<-' (c("locus", "gene", "celltype"))
+          
+          combined.data <- rbind(remap.col, promoter.col) %>% distinct() %>%
+            mutate(remap.promoter = 1)
+          
+          ## Add result from match.set to proposal set and summarise result
+          remap.p.res <- proposal.set %>% left_join(x = ., y = combined.data, by = c("locus", "gene", "celltype")) %>%
+            mutate(remap.promoter = replace_na(remap.promoter, replace = 0)) %>%
+            dplyr::summarise(remap.promoter = sum(remap.promoter) / length(remap.promoter)) %>%
+            mutate(n = x) %>% .[, c("n", "remap.promoter")]
+        } ## end of else code
         
       }, mc.cores = n.cores)
       ## List to df
-      mb.p.obj <- as.data.frame(do.call(rbind, mb.p.obj))
+      remap.p.obj <- as.data.frame(do.call(rbind, remap.p.obj))
       ## Store in list
       obj.fun.res[["remap.promoter"]] <- remap.p.obj
     }
