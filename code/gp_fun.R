@@ -646,9 +646,11 @@ gwas_gp <- function(init.proposal, generations, obj.fun, khan.method, selection.
         left_join(x = ., y = exp.gene, by = c("remap.gene"="gene_name"), relationship = "many-to-many") %>%
         dplyr::rename("remap.celltype"="type", "remap.express"="express") %>%
         na.omit() %>%
+        distinct() %>% ## HERE IS WHERE WE ARE CHANGING PROMOTER DOES NOT NEED EXPRESSION ##
+        dplyr::select(-promoter.celltype) %>%
         distinct()
       ## Only include cases where cell type between 2 cell type is the same
-      remap.promoter.lookup <- remap.promoter.lookup[which(remap.promoter.lookup$promoter.celltype == remap.promoter.lookup$remap.celltype),]
+      # remap.promoter.lookup <- remap.promoter.lookup[which(remap.promoter.lookup$promoter.celltype == remap.promoter.lookup$remap.celltype),]
       
       remap.p.obj <- mclapply(X = as.list(unique(df$n)), FUN = function(x) {
         ## Get info on proposal
@@ -658,9 +660,9 @@ gwas_gp <- function(init.proposal, generations, obj.fun, khan.method, selection.
                                        relationship = "many-to-many") %>%
           na.omit() %>% 
           dplyr::rename("remap.locus"="locus") %>% 
-          left_join(x = ., y = proposal.set, by = c("promoter.gene"="gene", "promoter.celltype"="celltype"),
+          left_join(x = ., y = proposal.set, by = c("promoter.gene"="gene"),#, "promoter.celltype"="celltype"), ## CHANGE HERE TOO
                     relationship = "many-to-many") %>%
-          dplyr::rename("promoter.locus"="locus") %>% 
+          dplyr::rename("promoter.locus"="locus", "promoter.celltype"="celltype") %>% ## CHANGE HERE TOO
           na.omit()
         
         if(nrow(match.set) == 0) { ## If no remap.promoter pairs then do the following
@@ -3252,7 +3254,7 @@ get.consensus.run <- function(data, loci, nearbygenes) {
 ## get objective function OF ##
 ## function to pull out no omics obj fun score each generation 
 getOFmean <- function(data, type, omic) {
-  df <- as.data.frame(do.call(rbind, data[1:100])) %>%
+  df <- as.data.frame(do.call(rbind, data[1:1000])) %>%
     dplyr::group_by(gen) %>%
     dplyr::summarise(marker.gene = mean(marker.gene),
                      magma = mean(magma),
@@ -3264,10 +3266,11 @@ getOFmean <- function(data, type, omic) {
                      promoter = mean(promoter),
                      marker.atac = mean(marker.atac),
                      common.atac = mean(common.atac),
-                     tfbs = mean(tfbs),
-                     mb.tfexpress = mean(mb.tfexpress),
-                     htftarget = mean(htftarget),
-                     mb.remap = mean(mb.remap),
+                     #tfbs = mean(tfbs),
+                     # mb.tfexpress = mean(mb.tfexpress),
+                     # htftarget = mean(htftarget),
+                     # mb.remap = mean(mb.remap),
+                     # remap.promoter = mean(remap.promoter),
                      fitness = mean(fitness)) %>%
     mutate(type = type,
            omic = omic)
