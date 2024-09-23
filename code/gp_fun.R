@@ -819,6 +819,7 @@ gwas_gp <- function(init.proposal, generations, obj.fun, khan.method, selection.
   fitness.res.list[["fitness"]] <-fitness.df
   fitness.res.list[["selection"]] <- selection.method
   fitness.res.list[["mutrate"]] <- mut.rate
+  fitness.res.list[["init.proposal"]] <- init.proposal
   return(fitness.res.list)
 } ## End of wrapper
 
@@ -2994,15 +2995,15 @@ get.consensus.run <- function(data, loci, nearbygenes) {
     j <- j+1
   }
   
-  result <- merge(geneframe, cellframe, by = "locus") %>%
-    left_join(x = ., y = distinct(nearbygenes[, c("gene_name", "gene_type")]), by = c("gene"="gene_name"))
+  result <- merge(geneframe, cellframe, by = "locus") #%>%
+    #left_join(x = ., y = distinct(nearbygenes[, c("gene_name", "gene_type")]), by = c("gene"="gene_name"))
 }
 
 ###############################
 ## get objective function OF ##
 ## function to pull out no omics obj fun score each generation 
 getOFmean <- function(data, type, omic) {
-  df <- as.data.frame(do.call(rbind, data[1:500])) %>%
+  df <- as.data.frame(do.call(rbind, data[1:200])) %>%
     dplyr::group_by(gen) %>%
     dplyr::summarise(marker.gene = mean(marker.gene),
                      magma = mean(magma),
@@ -3458,26 +3459,6 @@ calc_fitness_no_omics <- function(df, obj.fun, n.cores, method) {
 
 getOFhits <- function(data, obj.fun) { ## Data is df of locus, gene and cell type; obj.fun is a vector of OF to use
   obj.fun.res <- list()
-  #############################
-  ## CEVM Objective Function ##
-  if("cevm" %in% obj.fun) { ## If cevm then do the following
-    cevm <- cevm.genes %>% mutate(cevm = 1)
-    
-    cevm.obj <- data %>% left_join(x = ., y = cevm, by = c("gene", "celltype")) %>%
-      mutate(cevm = replace_na(cevm, replace = 0)) 
-    obj.fun.res[["cevm"]] <- as.data.frame(cevm.obj)
-  }
-  
-  ####################################
-  ## FindMarkers Objective Function ##
-  if("findmarkers" %in% obj.fun) {
-    fm <- marker.hits %>% mutate(fm = 1)
-    
-    fm.obj <- data %>% left_join(x = ., y = fm, by = c("gene", "celltype")) %>%
-      mutate(fm = replace_na(fm, replace = 0)) 
-    obj.fun.res[["findmarkers"]] <- as.data.frame(fm.obj)
-  }
-  
   ########################################
   ## Combined gene marker - CEVM and FM ##
   if("marker.gene" %in% obj.fun) {
@@ -3486,7 +3467,7 @@ getOFhits <- function(data, obj.fun) { ## Data is df of locus, gene and cell typ
     
     ## Data process
     marker.gene.obj <- data %>% left_join(x = ., y = marker.gene, by = c("gene", "celltype")) %>% ## join marker.gene to proposal
-      mutate(marker.gene = replace_na(marker.gene, replace = 0))
+      mutate(marker.gene = replace_na(marker.gene, replace = 0)) ## replace NA with 0
     obj.fun.res[["marker.gene"]] <- as.data.frame(marker.gene.obj) ## store in list
   }
   ##############################
@@ -3501,21 +3482,23 @@ getOFhits <- function(data, obj.fun) { ## Data is df of locus, gene and cell typ
   ## Cancer Gene Objective Function ## 
   if("cancer.gene" %in% obj.fun) {
     hi.mut.obj <- data %>% left_join(x = ., y = breast.cancer.gene, by = "gene") %>% ## join cancer.gene to proposal
-      mutate(cancer.gene = replace_na(cancer.gene, replace = 0))## replace NA with 0
+      mutate(cancer.gene = replace_na(cancer.gene, replace = 0)) ## replace NA with 0
     obj.fun.res[["cancer.gene"]] <- as.data.frame(hi.mut.obj) ## store in list
   }
   
   ############################
   ## PPI Objective Function ##
   if(any(c("ppi", "intra.ppi", "inter.ppi", "marker.ppi", "go.cc.ppi") %in% obj.fun)) {
-    
-    ppi.obj <- ppi %>% left_join(x = ., y = data, by = c("gene1"="gene"),
-                                   relationship = "many-to-many") %>%
+      ## Get info on proposal
+      proposal.set <- data
+      ## Match proposal elements with ppi
+      ppi.obj <- ppi %>% left_join(x = ., y = proposal.set, by = c("gene1"="gene"),
+                                     relationship = "many-to-many") %>%
         dplyr::rename("celltype1"="celltype", "locus1"="locus") %>%
-        left_join(x = ., y = data, by = c("gene2"="gene"),
+        left_join(x = ., y = proposal.set, by = c("gene2"="gene"),
                   relationship = "many-to-many") %>%
         dplyr::rename("celltype2"="celltype", "locus2"="locus") %>% 
-        na.omit()
+        na.omit() 
     
     #######################
     ## Intracellular PPI ##
@@ -3531,29 +3514,31 @@ getOFhits <- function(data, obj.fun) { ## Data is df of locus, gene and cell typ
         dplyr::select(-grp) %>%
         distinct()
       
-      ## Save intra.df as another object
-        if(nrow(intra.df) > 0) {
-          df1 <- intra.df %>% dplyr::select(gene1, celltype1) %>% 'colnames<-' (c("gene", "celltype")) %>% distinct()
-          df2 <- intra.df %>% dplyr::select(gene2, celltype2) %>% 'colnames<-' (c("gene", "celltype")) %>% distinct()
+        intra.ppi.genes <- intra.df 
+        if(nrow(intra.ppi.genes) > 0) {
+          df1 <- intra.ppi.genes %>% dplyr::select(gene1, celltype1) %>% 'colnames<-' (c("gene", "celltype")) %>% distinct()
+          df2 <- intra.ppi.genes %>% dplyr::select(gene2, celltype2) %>% 'colnames<-' (c("gene", "celltype")) %>% distinct()
           intra.ppi.set <- rbind(df1, df2) %>% mutate(intra.ppi = 1) %>% distinct()
-
-          ## Add result to original proposal
+          
+          ## Get specific proposal set 
           intra.res <- data %>% left_join(x = ., y = intra.ppi.set, by = c("gene", "celltype")) %>%
-            mutate(intra.ppi = replace_na(intra.ppi, replace = 0))
+            mutate(intra.ppi = replace_na(intra.ppi, replace = 0)) 
         } else {
-          intra.res <- data %>% mutate(intra.ppi = 0) 
-          }
-
+          intra.res <- data %>% mutate(intra.ppi = 0)
+        }
+        
       obj.fun.res[["intra.ppi"]] <- intra.res
     } ## End of intra ppi
     
     #############
     ## All PPI ##
     if("ppi" %in% obj.fun) {
-        ppi.genes <- data.frame(gene = unique(c(ppi.obj$gene1, ppi.obj$gene2)),
+      
+        ppi.df <- ppi.obj
+        ppi.genes <- data.frame(gene = unique(c(ppi.df$gene1, ppi.df$gene2)),
                                 ppi = 1)
         ppi.res <- data %>% left_join(x = ., y = ppi.genes, by = "gene") %>%
-          mutate(ppi = replace_na(ppi, replace = 0))
+          mutate(ppi = replace_na(ppi, replace = 0)) 
 
       obj.fun.res[["ppi"]] <- ppi.res
     } ## End of ppi
@@ -3567,14 +3552,15 @@ getOFhits <- function(data, obj.fun) { ## Data is df of locus, gene and cell typ
         na.omit() #%>% ## Keep positive hits.
       
       if(nrow(marker.obj) == 0) {
-        marker.ppi.obj <- data %>% mutate(marker.ppi = 0) 
+        marker.ppi.obj <- data %>% mutate(marker.ppi = 0)
       } else {
-          df1 <- marker.obj %>% dplyr::select(gene1, celltype1) %>% 'colnames<-' (c("gene", "celltype")) %>% distinct()
-          df2 <- marker.obj %>% dplyr::select(gene2, celltype2) %>% 'colnames<-' (c("gene", "celltype")) %>% distinct()
+          marker.df <- marker.obj
+          df1 <- marker.df %>% dplyr::select(gene1, celltype1) %>% 'colnames<-' (c("gene", "celltype")) %>% distinct()
+          df2 <- marker.df %>% dplyr::select(gene2, celltype2) %>% 'colnames<-' (c("gene", "celltype")) %>% distinct()
           marker.ppi.set <- rbind(df1, df2) %>% mutate(marker.ppi = 1) %>% distinct()
           
           marker.ppi.obj <- data %>% left_join(x = ., y = marker.ppi.set, by = c("gene", "celltype")) %>%
-            mutate(marker.ppi = replace_na(marker.ppi, replace = 0)) 
+            mutate(marker.ppi = replace_na(marker.ppi, replace = 0))
       }
       
       obj.fun.res[["marker.ppi"]] <- marker.ppi.obj
@@ -3627,17 +3613,18 @@ getOFhits <- function(data, obj.fun) { ## Data is df of locus, gene and cell typ
           ## Removing target and source identity column
           dplyr::select(-source_gene1, -source_gene2, -target_gene1, -target_gene2)
         
-          df1 <- inter.obj %>% dplyr::select(gene1, celltype1) %>% 'colnames<-' (c("gene", "celltype")) %>% distinct()
-          df2 <- inter.obj %>% dplyr::select(gene2, celltype2) %>% 'colnames<-' (c("gene", "celltype")) %>% distinct()
+          marker.df <- inter.obj
+          df1 <- marker.df %>% dplyr::select(gene1, celltype1) %>% 'colnames<-' (c("gene", "celltype")) %>% distinct()
+          df2 <- marker.df %>% dplyr::select(gene2, celltype2) %>% 'colnames<-' (c("gene", "celltype")) %>% distinct()
           inter.ppi.set <- rbind(df1, df2) %>% mutate(inter.ppi = 1) %>% distinct()
           
           inter.ppi.obj <- data %>% left_join(x = ., y = inter.ppi.set, by = c("gene", "celltype")) %>%
-            mutate(inter.ppi = replace_na(inter.ppi, replace = 0))
+            mutate(inter.ppi = replace_na(inter.ppi, replace = 0)) 
       }
       
       obj.fun.res[["inter.ppi"]] <- inter.ppi.obj
     } ## End of inter.ppi
-    
+      
   } ## End of broad ppi umbrella
   
   #################################
@@ -3654,39 +3641,42 @@ getOFhits <- function(data, obj.fun) { ## Data is df of locus, gene and cell typ
   ## Marker atac peak 
   if("marker.atac" %in% obj.fun) {
     m.atac.obj <- data %>% left_join(x = ., y = atac.marker, by = c("locus", "celltype")) %>%
-      mutate(marker.atac = replace_na(marker.atac, replace = 0)) 
+      mutate(marker.atac = replace_na(marker.atac, replace = 0))
     obj.fun.res[["marker.atac"]] <- m.atac.obj
   }
   ## Common atac peak
   if("common.atac" %in% obj.fun) {
     c.atac.obj <- data %>% left_join(x = ., y = common.atac.hit, by = c("locus", "celltype")) %>%
-      mutate(common.atac = replace_na(common.atac, replace = 0)) 
+      mutate(common.atac = replace_na(common.atac, replace = 0))
     obj.fun.res[["common.atac"]] <- c.atac.obj
   }
   ########################
   ## lncrna interaction ##
   if("lncrna" %in% obj.fun) {
+      ## Get info on proposal
+      proposal.set <- data 
       ## Match proposal elements with ppi
-      match.set <- rna.protein.map %>% left_join(x = ., y = data, by = c("gene1"="gene"),
+      match.set <- rna.protein.map %>% left_join(x = ., y = proposal.set, by = c("gene1"="gene"),
                                                  relationship = "many-to-many") %>%
         dplyr::rename("celltype1"="celltype", "locus1"="locus") %>%
-        left_join(x = ., y = data, by = c("gene2"="gene"),
+        left_join(x = ., y = proposal.set, by = c("gene2"="gene"),
                   relationship = "many-to-many") %>%
         dplyr::rename("celltype2"="celltype", "locus2"="locus") %>% 
         na.omit() 
       
-      if(nrow(match.set) == 0) {
-        lncrna.res <- data %>% mutate(lncrna = 0)
+      if(nrow(match.set) == 0) { ## If no lncrna interaction then do this
+        all.lncrna.obj <- data %>% mutate(lncrna = 0)
       } else {
-        lncrna.genes <- data.frame(gene = unique(c(lncrna.df$gene1, lncrna.df$gene2)),
-                                   lncrna = 1)
-      lncrna.res <- data %>% left_join(x = ., y = lncrna.genes, by = "gene") %>%
-        mutate(lncrna = replace_na(lncrna, replace = 0)) 
-      }
+          lncrna.df <- match.set 
+          lncrna.genes <- data.frame(gene = unique(c(lncrna.df$gene1, lncrna.df$gene2)),
+                                     lncrna = 1)
+          all.lncrna.obj <- data %>% left_join(x = ., y = lncrna.genes, by = "gene") %>%
+            mutate(lncrna = replace_na(lncrna, replace = 0)) 
+        }
       
-    obj.fun.res[["lncrna"]] <- lncrna.res
-  } ## end of lncrna
   
+    obj.fun.res[["lncrna"]] <- all.lncrna.obj
+  } ## end of lncrna
   
   ## Combine the obj.fun.hit together 
   for(n in 1:length(obj.fun)) {
@@ -3701,4 +3691,13 @@ getOFhits <- function(data, obj.fun) { ## Data is df of locus, gene and cell typ
   ## Return final res
   return(obj.hits)
 } ## End of getOFhits function
+
+## This is for stringdb to get experimental score similar to the webportal when looking at ppi network
+compute_prior_away <- function(score, prior = 0.041) {
+  score <- score / 1000
+  score <- case_when(score < prior ~ prior,
+                     TRUE ~ score)
+  score_no_prior = (score - prior) / (1 - prior)
+  return(score_no_prior)
+}
 

@@ -1,25 +1,25 @@
-rm(list = ls(all.names = T)); gc()
-
+## Libraries
 library(data.table)
 library(tidyverse)
 library(quantsmooth)
+library(motifbreakR)
 
-## Filtering for fine map snps
+## Load GWAS catalog and keep BCa studies
 gwas_catalog <- fread(file = "/drive-pool/data/peter_data/genetic_programming/gwas/gwas_catalog_v1.0.2-associations_e109_r2023-06-03.tsv",
                       select = c("REGION", "CHR_ID", "CHR_POS", "SNPS", "SNP_ID_CURRENT", "P-VALUE", "PUBMEDID", "DATE", "MAPPED_TRAIT")) %>%
-  dplyr::filter(PUBMEDID %in% c(32424353, 29059683, 29058716, 23535733, 25751625, 25038754, 23544012, 20453838)) %>% ## These are all the pubmed id needed for finemap
+  dplyr::filter(PUBMEDID %in% c(32424353, 29059683, 29058716, 23535733, 25751625, 25038754, 23544012, 20453838)) %>% ## These are all the pubmed id needed for BCa SNP
   dplyr::rename("PVALUE" = "P-VALUE") %>%
   mutate(PVALUE = as.numeric(PVALUE))
 
-## susceptibility variants from genome-wide analyses (obj names is finemap_pmid)
-finemap_32424353 <- c("rs78378222", "rs9712235", "rs141526427", "rs6065254", "rs7760611", "rs7924772", "rs206435",
+## susceptibility variants from pmid (obj names is finemap_pmid)
+pmid_32424353 <- c("rs78378222", "rs9712235", "rs141526427", "rs6065254", "rs7760611", "rs7924772", "rs206435",
                       "rs17215231", "rs4742903", "chr1:145126177", "rs79518236", "rs138044103", "rs12962334", "rs188092014",
                       "rs1375631", "rs13039563", "rs1061657", "rs495367", "rs2464195", "rs5776993", "chr12:29140260", "rs13277568",
                       "rs9808759", "rs2886671", "rs17743054", "rs4602255", "rs142890050", "rs11652463", "rs10838267", "rs13256025",
                       "rs11065822", "rs34052812"
 )
 
-finemap_29059683 <- c("rs2992756", "rs4233486", "rs79724016", "rs1707302", "rs140850326", "rs17426269", "rs7529522",
+pmid_29059683 <- c("rs2992756", "rs4233486", "rs79724016", "rs1707302", "rs140850326", "rs17426269", "rs7529522",
                       "rs4971059", "rs35383942", "rs11117758", "rs113577745", "rs6725517", "rs71801447", "rs12479355",
                       "rs6805189", "rs13066793", "rs9833888", "rs34207738", "rs58058861", "rs6815814", "chr4:84370124",
                       "rs10022462", "rs77528541", "rs116095464", "rs72749841", "rs35951924", "rs6882649", "rs6596100",
@@ -31,14 +31,14 @@ finemap_29059683 <- c("rs2992756", "rs4233486", "rs79724016", "rs1707302", "rs14
                       "rs28512361"
 )
 
-finemap_29058716 <- c("rs200648189", "rs6569648", "rs66823261", "rs17350191", "rs11374964", "rs74911261", "rs11076805",
+pmid_29058716 <- c("rs200648189", "rs6569648", "rs66823261", "rs17350191", "rs11374964", "rs74911261", "rs11076805",
                       "rs36194942", "rs322144", "rs113701136"
 )
 
-finemap_23535733 <- c("rs4245739", "rs6678914", "rs12710696", "rs11075995"
+pmid_23535733 <- c("rs4245739", "rs6678914", "rs12710696", "rs11075995"
 )
-## Known finemap from 29058716 supplemental table 10. Finemap from 31 diff source
-known.finemap <- c("rs616488", "rs11552449", "rs11249433", "rs12405132", "rs12048493", "rs4951011", "rs72755295",
+## Known variants from 29058716 supplemental table 10. Variants from 31 diff source
+known.variants <- c("rs616488", "rs11552449", "rs11249433", "rs12405132", "rs12048493", "rs4951011", "rs72755295",
                    "rs4849887", "rs2016394", "rs1550623", "rs1830298", "rs34005590", "rs4442975", "rs16857609",
                    "rs6762644", "rs4973768", "rs12493607", "rs6796502", "rs1053338", "rs9790517", "rs6828523", 
                    "rs3215401", "rs13162653", "rs2012709", "rs10941679", "rs62355902", "rs10472076", "rs1353747",
@@ -54,81 +54,81 @@ known.finemap <- c("rs616488", "rs11552449", "rs11249433", "rs12405132", "rs1204
                    "rs17879961", "rs132390", "chr22:39359355", "rs6001930"
 )
 ## Get total finemap 
-total_finemap <- unique(c(finemap_23535733, finemap_29058716, finemap_29059683, finemap_32424353, known.finemap))
+total_snp <- unique(c(pmid_23535733, pmid_29058716, pmid_29059683, pmid_32424353, known.variants))
 
-gwas_finemap <- gwas_catalog %>% dplyr::filter(SNPS %in% total_finemap) %>%
+gwas_snps <- gwas_catalog %>% dplyr::filter(SNPS %in% total_snp) %>%
   rownames_to_column(var = "rowid")
 
 ## Clean up obj no longer needed
-rm(finemap_23535733,finemap_29058716, finemap_29059683, finemap_32424353, known.finemap, total_finemap); gc()
+rm(pmid_23535733, pmid_29058716, pmid_29059683, pmid_32424353, known.variants, total_snp); gc()
 
 ## Get rid of dups from diff study. Will choose SNP from most recent study with the highest pval
-dup.snps <- gwas_finemap$SNPS[which(duplicated(gwas_finemap$SNPS))] %>% unique()
+dup.snps <- gwas_snps$SNPS[which(duplicated(gwas_snps$SNPS))] %>% unique()
 
 for(n in dup.snps) {
-  df.dup <- gwas_finemap %>% dplyr::filter(SNPS %in% n) %>% arrange(desc(DATE), PVALUE) %>% .[-1,] %>% .$rowid
-  gwas_finemap <- gwas_finemap %>% dplyr::filter(!rowid %in% df.dup)
+  df.dup <- gwas_snps %>% dplyr::filter(SNPS %in% n) %>% arrange(desc(DATE), PVALUE) %>% .[-1,] %>% .$rowid
+  gwas_snps <- gwas_snps %>% dplyr::filter(!rowid %in% df.dup)
 }
 
 rm(df.dup, dup.snps, n); gc()
 
 ## There are 7 snps without chr_id chr_pos and region
-gwas_finemap[which(gwas_finemap$SNPS == "rs2380205"), "REGION"] <- quantsmooth::position2Cytoband(10,5926740,units="hg38")
-gwas_finemap[which(gwas_finemap$SNPS == "rs2380205"), "CHR_ID"] <- "10"
-gwas_finemap[which(gwas_finemap$SNPS == "rs2380205"), "CHR_POS"] <- "5926740"
+gwas_snps[which(gwas_snps$SNPS == "rs2380205"), "REGION"] <- quantsmooth::position2Cytoband(10,5926740,units="hg38")
+gwas_snps[which(gwas_snps$SNPS == "rs2380205"), "CHR_ID"] <- "10"
+gwas_snps[which(gwas_snps$SNPS == "rs2380205"), "CHR_POS"] <- "5926740"
 
-gwas_finemap[which(gwas_finemap$SNPS == "chr12:29140260"), "REGION"] <- quantsmooth::position2Cytoband(12,29140260,units="hg38")
-gwas_finemap[which(gwas_finemap$SNPS == "chr12:29140260"), "CHR_ID"] <- "12"
-gwas_finemap[which(gwas_finemap$SNPS == "chr12:29140260"), "CHR_POS"] <- "29140260"
+gwas_snps[which(gwas_snps$SNPS == "chr12:29140260"), "REGION"] <- quantsmooth::position2Cytoband(12,29140260,units="hg38")
+gwas_snps[which(gwas_snps$SNPS == "chr12:29140260"), "CHR_ID"] <- "12"
+gwas_snps[which(gwas_snps$SNPS == "chr12:29140260"), "CHR_POS"] <- "29140260"
 
-gwas_finemap[which(gwas_finemap$SNPS == "chr1:145126177"), "REGION"] <- quantsmooth::position2Cytoband(1,145126177,units="hg38")
-gwas_finemap[which(gwas_finemap$SNPS == "chr1:145126177"), "CHR_ID"] <- "1"
-gwas_finemap[which(gwas_finemap$SNPS == "chr1:145126177"), "CHR_POS"] <- "145126177"
+gwas_snps[which(gwas_snps$SNPS == "chr1:145126177"), "REGION"] <- quantsmooth::position2Cytoband(1,145126177,units="hg38")
+gwas_snps[which(gwas_snps$SNPS == "chr1:145126177"), "CHR_ID"] <- "1"
+gwas_snps[which(gwas_snps$SNPS == "chr1:145126177"), "CHR_POS"] <- "145126177"
 
-gwas_finemap[which(gwas_finemap$SNPS == "chr4:84370124"), "REGION"] <- quantsmooth::position2Cytoband(4,84370124,units="hg38")
-gwas_finemap[which(gwas_finemap$SNPS == "chr4:84370124"), "CHR_ID"] <- "4"
-gwas_finemap[which(gwas_finemap$SNPS == "chr4:84370124"), "CHR_POS"] <- "84370124"
+gwas_snps[which(gwas_snps$SNPS == "chr4:84370124"), "REGION"] <- quantsmooth::position2Cytoband(4,84370124,units="hg38")
+gwas_snps[which(gwas_snps$SNPS == "chr4:84370124"), "CHR_ID"] <- "4"
+gwas_snps[which(gwas_snps$SNPS == "chr4:84370124"), "CHR_POS"] <- "84370124"
 
-gwas_finemap[which(gwas_finemap$SNPS == "chr22:39359355"), "REGION"] <- quantsmooth::position2Cytoband(22,39359355,units="hg38")
-gwas_finemap[which(gwas_finemap$SNPS == "chr22:39359355"), "CHR_ID"] <- "22"
-gwas_finemap[which(gwas_finemap$SNPS == "chr22:39359355"), "CHR_POS"] <- "39359355"
+gwas_snps[which(gwas_snps$SNPS == "chr22:39359355"), "REGION"] <- quantsmooth::position2Cytoband(22,39359355,units="hg38")
+gwas_snps[which(gwas_snps$SNPS == "chr22:39359355"), "CHR_ID"] <- "22"
+gwas_snps[which(gwas_snps$SNPS == "chr22:39359355"), "CHR_POS"] <- "39359355"
 
-gwas_finemap[which(gwas_finemap$SNPS == "rs8176636"), "REGION"] <- "9q34.2"
-gwas_finemap[which(gwas_finemap$SNPS == "rs8176636"), "CHR_ID"] <- "9"
-gwas_finemap[which(gwas_finemap$SNPS == "rs8176636"), "CHR_POS"] <- "136151579"
+gwas_snps[which(gwas_snps$SNPS == "rs8176636"), "REGION"] <- "9q34.2"
+gwas_snps[which(gwas_snps$SNPS == "rs8176636"), "CHR_ID"] <- "9"
+gwas_snps[which(gwas_snps$SNPS == "rs8176636"), "CHR_POS"] <- "136151579"
 
-gwas_finemap[which(gwas_finemap$SNPS == "chr17:29230520"), "REGION"] <- quantsmooth::position2Cytoband(17,29230520,units="hg38")
-gwas_finemap[which(gwas_finemap$SNPS == "chr17:29230520"), "CHR_ID"] <- "17"
-gwas_finemap[which(gwas_finemap$SNPS == "chr17:29230520"), "CHR_POS"] <- "29230520"
+gwas_snps[which(gwas_snps$SNPS == "chr17:29230520"), "REGION"] <- quantsmooth::position2Cytoband(17,29230520,units="hg38")
+gwas_snps[which(gwas_snps$SNPS == "chr17:29230520"), "CHR_ID"] <- "17"
+gwas_snps[which(gwas_snps$SNPS == "chr17:29230520"), "CHR_POS"] <- "29230520"
 
 ## Update SNP_ID_CURRENT. Add rs to front of rsid
-snps.rsid <- grep(pattern = "rs", x = gwas_finemap$SNPS)
-snps.chr <- grep(pattern = "chr", x = gwas_finemap$SNPS)
+snps.rsid <- grep(pattern = "rs", x = gwas_snps$SNPS)
+snps.chr <- grep(pattern = "chr", x = gwas_snps$SNPS)
 
 ## Add rs in front of the current snp id
 for(rsid in snps.rsid) {
-  gwas_finemap[rsid, "SNP_ID_CURRENT"] <- paste0("rs", gwas_finemap[rsid,"SNP_ID_CURRENT"])
+  gwas_snps[rsid, "SNP_ID_CURRENT"] <- paste0("rs", gwas_snps[rsid,"SNP_ID_CURRENT"])
 }
 ## Copy original snp (chr?:????) to SNP_ID_CURRENT. It's missing
 for(schr in snps.chr) {
-  gwas_finemap[schr, "SNP_ID_CURRENT"] <- gwas_finemap[schr,"SNPS"]
+  gwas_snps[schr, "SNP_ID_CURRENT"] <- gwas_snps[schr,"SNPS"]
 }
 rm(snps.chr, schr, rsid, snps.rsid); gc()
 
 ## How many snps name were changed b/c of the SNP_ID_CURRENT?
-table(gwas_finemap$SNPS == gwas_finemap$SNP_ID_CURRENT) ## 6 snps were changed
+# table(gwas_snps$SNPS == gwas_snps$SNP_ID_CURRENT) ## 6 snps were changed
 
-gwas_finemap$CHR_POS <- as.numeric(gwas_finemap$CHR_POS)
-#save(gwas_catalog, gwas_finemap, file = "/drive-pool/data/peter_data/genetic_programming/code/brca/gwas_finemap.rda")
+gwas_snps$CHR_POS <- as.numeric(gwas_snps$CHR_POS)
+#save(gwas_catalog, gwas_snps, file = "/drive-pool/data/peter_data/genetic_programming/code/brca/gwas_snps.rda")
 
 rm(list = ls(all.names = T)); gc()
 
 ###################################
 ## Fix snps that don't have rsid ##
 ###################################
-load("/drive-pool/data/peter_data/genetic_programming/code/brca/gwas_finemap.rda")
+load("/drive-pool/data/peter_data/genetic_programming/code/brca/gwas_snps.rda")
 ## Get all current snp id
-snps <- gwas_finemap$SNP_ID_CURRENT
+snps <- gwas_snps$SNP_ID_CURRENT
 no.rsid <- snps[grep(pattern = "chr", x = snps)] ## There are 5 snps that don't have rsid. lets see why.
 
 ## Used ncbi variation viewer to track the rsid 
@@ -141,7 +141,7 @@ no.rsid <- snps[grep(pattern = "chr", x = snps)] ## There are 5 snps that don't 
 
 updated.rsid <- data.frame(SNPS = c("chr12:29140260", "chr1:145126177", "chr4:84370124", "chr22:39359355", "chr17:29230520"),
                            SNPS_updated = c("rs1027113", "rs587712509", "rs1721204963", "rs868638441", "rs62070644"))
-## Using snps.from.rsid to get coord to update gwas_finemap
+## Using snps.from.rsid to get coord to update gwas_snps
 snps.mb <- snps.from.rsid(rsid = updated.rsid$SNPS_updated,
                           dbSNP = SNPlocs.Hsapiens.dbSNP155.GRCh38,
                           search.genome = BSgenome.Hsapiens.UCSC.hg38)
@@ -153,46 +153,29 @@ snps.mb <- snps.mb %>% dplyr::select(seqnames, start, SNP_id) %>%
   left_join(x = ., y = updated.rsid, by = "SNPS_updated")
 rm(snps, no.rsid); gc()
 
-gwas_finemap <- gwas_finemap %>% left_join(x = ., y = snps.mb, by = "SNPS")
+gwas_snps <- gwas_snps %>% left_join(x = ., y = snps.mb, by = "SNPS")
 
-#save(gwas_catalog, gwas_finemap, file = "/drive-pool/data/peter_data/genetic_programming/code/brca/gwas_finemap.rda")
+#save(gwas_catalog, gwas_snps, file = "/drive-pool/data/peter_data/genetic_programming/code/brca/gwas_snps.rda")
 
 ## Find which rows need to have the SNP_ID_CURRENT and CHR_POS updated
-chr_to_rsid <- which(!is.na(gwas_finemap$SNPS_updated)) ## Should be only 5 b/c we had 5 chr ids
+chr_to_rsid <- which(!is.na(gwas_snps$SNPS_updated)) ## Should be only 5 b/c we had 5 chr ids
 ## for loop to apply update
 for(n in chr_to_rsid) {
   ## update snp_id_current
-  gwas_finemap[n, "SNP_ID_CURRENT"] <- gwas_finemap[n, "SNPS_updated"]
+  gwas_snps[n, "SNP_ID_CURRENT"] <- gwas_snps[n, "SNPS_updated"]
   ## update chr_pos
-  gwas_finemap[n, "CHR_POS"] <- gwas_finemap[n, "start"]
+  gwas_snps[n, "CHR_POS"] <- gwas_snps[n, "start"]
 }
-gwas_finemap <- gwas_finemap %>% dplyr::select(-seqnames, -start, -SNPS_updated)
+gwas_snps <- gwas_snps %>% dplyr::select(-seqnames, -start, -SNPS_updated)
 
-library(RIdeogram)
-load("/drive-pool/data/peter_data/genetic_programming/code/brca/gwas_finemap.rda")
-
-## Load data for drawing ideogram
-data(human_karyotype, package="RIdeogram")
-data(gene_density, package="RIdeogram")
-
-## Create df for marking snps on the ideogram
-snp_marks <- data.frame(Type = "SNP",
-                        Shape = "circle",
-                        Chr = gwas_finemap$CHR_ID,
-                        Start = gwas_finemap$CHR_POS,
-                        End = gwas_finemap$CHR_POS,
-                        color = "6a3d9a")
-
-
-ideogram(karyotype = human_karyotype, label = snp_marks, label_type = "marker", overlaid = gene_density)
-convertSVG("chromosome.svg", device = "png")
-
-rm(gene_density, gwas_catalog, human_karyotype, snp_marks); gc()
+#####################
+## Find Proxy SNPs ##
+#####################
 
 #devtools::install_github("CBIIT/LDlinkR")
 library(LDlinkR)
 
-snps <- gwas_finemap$SNP_ID_CURRENT
+snps <- gwas_snps$SNP_ID_CURRENT
 counter <- 1
 ## Creating list to store res from for loop below. LDproxy does not like multi queries
 ldproxy_res <- list()
@@ -203,7 +186,7 @@ for(snp in snps) {
   
   res <- LDproxy(
     snp = snp,
-    pop = c("CEU", "TSI", "GBR", "IBS"), ## All european pop
+    pop = c("CEU", "TSI", "GBR", "IBS"), ## All european pop except finnish
     r2d = "r2",
     token = "9dfb615d7a15", ## Unique token. Need to register on ldlink to get your own token
     file = FALSE,
