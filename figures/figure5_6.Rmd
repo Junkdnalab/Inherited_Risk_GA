@@ -1,0 +1,520 @@
+---
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+Load libraries
+```{r}
+library(tidyverse)
+library(igraph)
+library(ggbeeswarm)
+library(patchwork)
+library(magick)
+library(DescTools)
+library(data.table)
+load("/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/gwas_gp_manu_data/ditto.colours.rda")
+```
+
+
+Check network sizes
+```{r}
+## Load function
+source("/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/code/gp_fun_update.R")
+
+load("/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/gwas_gp_manu_data/ppi.map.rda"); rm(map.genes) ## PPI data
+str.db.link <- str.db.link %>% dplyr::select(protein1, protein2, experiments, 
+                                             experiments_transferred, combined_score) %>%
+  left_join(x = ., y = str.db.info, by = c("protein1"="string_id")) %>%
+  dplyr::rename("gene1"="gene_symbol") %>%
+  left_join(x = ., y = str.db.info, by = c("protein2"="string_id")) %>%
+  dplyr::rename("gene2"="gene_symbol") %>%
+  .[,c("protein1", "protein2", "gene1", "gene2", "experiments", "experiments_transferred", "combined_score")]
+
+#############################################################
+## Comment out breast or control to use for for loop below ##
+#############################################################
+
+## For control data set
+files <- "/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/data/"
+control_group <- paste0("control", c(1:4))
+run_group <- paste0("run_", c(1:10))
+
+## For breast cancer data set
+# files <- "/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/data/" 
+# control_group <- paste0("breast")
+# run_group <- paste0("run_", c(1:10))
+
+network.res <- list()
+
+## Generate trace plot for fitness score ##
+###########################################
+for(ctrl in control_group) {
+  for(rg in run_group) {
+    ## load file
+    groupname <- paste0(ctrl,"_",rg)
+    message(paste0("Working on ", groupname))
+    load(paste0(files,"progressive_",ctrl,"_",rg,"_ppithres0_092324.rda"))
+    ## Process data
+    df <- as.data.frame(do.call(rbind, multi.gp["proposal"])) %>%
+      remove_rownames()
+    n.loci <- nrow(df)/1000
+    ## Get # of high confidence calls from the consensus run
+    consensus.gene <- get.consensus.run(data = df, loci = n.loci) %>% pull(gene)
+    
+    ppi <- str.db.link %>% dplyr::filter(gene1 %in% consensus.gene, 
+                                         gene2 %in% consensus.gene) %>% ## Filter for specific genes found in gwas 200kb
+      group_by(grp = paste(pmax(gene1, gene2), pmin(gene1, gene2), sep = "_")) %>%
+      dplyr::filter(row_number() == 1) %>%
+      ungroup() %>%
+      dplyr::select(-grp) %>%
+      distinct()
+    
+    ppi.adj <- ppi %>% mutate(experiments_score = compute_prior_away(score = experiments),
+                              experiments_transferred_score = compute_prior_away(score = experiments_transferred)) %>% 
+      mutate(experiments_both_prior_corrected = 1 - (1 - experiments_score) * (1 - experiments_transferred_score)) %>% 
+	    mutate(final_score = (experiments_both_prior_corrected * (1 - 0.041)) + 0.041) %>%
+	    filter(final_score > 0.4)
+    ## Store data
+    el <- ppi.adj %>% dplyr::select(gene1, gene2) %>% as.matrix()
+    g <- graph_from_edgelist(el, directed = FALSE)
+    g.res <- igraph::components(g)
+    #plot(g)
+    network.res[[groupname]] <- g.res
+  }
+}
+
+processed.network.res <- list()
+
+## Get avg cluster size, max cluster size and number of cluster
+for(n in names(network.res)) {
+  df <- data.frame(avg.size  = mean(network.res[[n]]$csize),
+                   max.size = max(network.res[[n]]$csize),
+                   n.clust = network.res[[n]]$no
+                   )
+  processed.network.res[[n]] <- df
+}
+processed.network.res <- as.data.frame(do.call(rbind, processed.network.res))
+processed.network.res$group <- gsub(pattern = "_.*", replacement = "", x = rownames(processed.network.res))
+
+# save(processed.network.res, network.res, file = "/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/gwas_gp_manu_data/ctrl_network_res.rda")
+# save(processed.network.res, network.res, file = "/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/gwas_gp_manu_data/breast_network_res.rda")
+
+## Ran the code twice above for control and breast so you have to remember to change up the data used. like nearby genes and stuff.
+
+#rm(list = ls(all.names = T)); gc()
+load("/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/gwas_gp_manu_data/breast_network_res.rda"); rm(network.res)
+breast <- processed.network.res %>% mutate(type = "BCa")
+load("/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/gwas_gp_manu_data/ctrl_network_res.rda"); rm(network.res)
+ctrl <- processed.network.res %>% mutate(type = "Control"); rm(processed.network.res)
+
+combined.data <- rbind(breast, ctrl)
+
+point.color <- c("pink", "grey50")
+names(point.color) <- c("BCa", "Control")
+
+## KS test for max subgraph size
+ks.maxsize <- ks.test(breast$max.size, ctrl$max.size)
+## pvalue < 0.05, we reject the null hypothesis that the samples are drawn form the same distribution
+
+p1 <- ggplot(data = combined.data, aes(x = n.clust, y = max.size, color = type)) +
+  geom_point(size = 1, alpha = 0.5) +
+  scale_color_manual(values = point.color) +
+  theme_minimal() +
+  theme(legend.title = element_blank(),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank()) +
+  xlab("Total Number of Subgraphs") + ylab("Largest Subgraph Size") +
+  annotate("text", x = 12, y=37, label = paste0("KS = ", signif(ks.maxsize$p.value, digits = 4)), size = 3)
+
+## KS test for ncluster
+ks.nclust <- ks.test(breast$n.clust, ctrl$n.clust)
+
+p2 <- ggplot(data = combined.data, aes(x = n.clust, fill = type)) +
+  geom_density(alpha = 0.5) +
+  theme_minimal() + xlab("Total Number of Subgraphs") + ylab("Density") +
+  scale_fill_manual(values = point.color) +
+  guides(fill = "none") +
+  annotate("text", x = 12, y=0.15, label = paste0("KS = ", round(ks.nclust$p.value, digits = 3)), size = 3) +
+  theme(panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank())
+
+```
+
+
+gini simpson to select consensus of consensus
+```{r eval=FALSE}
+################################
+## Generate gini simpson plot ##
+################################
+
+## Load function
+source("/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/code/gp_fun_update.R")
+## Get path and file names
+path <- "/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/data/"
+files <- list.files(path = path, pattern = "breast")
+
+
+multirun.high.confid <- list()
+## For each breast GWAS run... do the following
+for(file in files) {
+  ## Message
+  message(paste0("Working on file: ", file))
+  ## Get run group info
+  run.group <- file %>% gsub(pattern = "_ppithres0_092324.rda*", replacement = "", x = .) %>%
+    gsub(pattern = ".*_", replacement = "", x = .) %>% as.numeric()
+  ## Load data
+  load(paste0(path,file))
+  ## Get table of all calls
+  consensus.run <- get.consensus.run(data = multi.gp[["proposal"]], loci = 206)
+  multirun.high.confid[[run.group]] <- consensus.run
+}
+
+## Compute gini score
+multirun_genes <- as.matrix(bind_cols(lapply(multirun.high.confid, function(x) { x %>% arrange(locus) %>% pull(gene) %>% matrix(data = ., ncol = 1)})))
+colnames(multirun_genes) <- NULL
+multirun_genes_gini <- apply(multirun_genes, 1, function(x) {GiniSimpson(factor(x))})
+multirun_genes_kinds <- apply(multirun_genes, 1, function(x) {length(levels(factor(x)))})
+
+## Checking what is the top score (Lowest confidence)
+# top.score <- which(multirun_genes_gini == max(multirun_genes_gini))
+# length(unique(multirun_genes[top.score,])) ## There are 9 genes across the 10 breast runs
+
+multirun_genes_df <- data.frame(locus = multirun.high.confid[[1]]$locus, multirun_genes)
+colnames(multirun_genes_df) <- c("locus", paste("run", 1:10, sep = "_"))
+multirun_genes_df$gini_simpson_index <- multirun_genes_gini
+multirun_genes_df$number_genes <- multirun_genes_kinds
+
+## Quick plot to see visualize gini simpson index by number of genes
+# ggplot(multirun_genes_df, aes(x = gini_simpson_index, y = number_genes)) + geom_jitter(height = 0.1, width = 0.01)
+# write.table(multirun_genes_df, sep = "\t", quote = F, row.names = F, file = "locus_based_similarity_of_loci.tsv")
+# table(multirun_genes_df$number_genes) ## Tabling the gene confidence. There are 44 high confidence good (10/10); 74 (2 genes for 10 runs)
+# table(multirun_genes_df$gini_simpson_index) ## Tabling index scores; lower the number the higher the confidence
+# ggplot(multirun_genes_df, aes(x = gini_simpson_index)) + geom_histogram()
+
+## Cell type gini simpson
+multirun_ct <- as.matrix(bind_cols(lapply(multirun.high.confid, function(x) { x %>% arrange(locus) %>% pull(celltype) %>% matrix(data = ., ncol = 1)})))
+colnames(multirun_ct) <- NULL
+multirun_ct_gini <- apply(multirun_ct, 1, function(x) {GiniSimpson(factor(x))}) ## gini scores
+multirun_ct_kinds <- apply(multirun_ct, 1, function(x) {length(levels(factor(x)))}) ## number of unique cell types
+
+## Wide format of individual consensus cell type calls
+multirun_ct_df <- data.frame(locus = multirun.high.confid[[1]]$locus, multirun_ct)
+## Relabel colnames
+colnames(multirun_ct_df) <- c("locus", paste("run", 1:10, sep = "_"))
+multirun_ct_df$gini_simpson_ct <- multirun_ct_gini ## Add gini simpson score
+multirun_ct_df$number_ct <- multirun_ct_kinds ## Add how many unique cell type
+
+## ## Keep the cell type with the highest cell count for each locus
+multirun_ct_df_summary <- multirun_ct_df %>% pivot_longer(starts_with("run")) %>% 
+  dplyr::select(-name) %>% 
+  group_by(locus) %>% 
+  count(locus, value, gini_simpson_ct) %>% 
+  dplyr::slice(which.max(n)) 
+
+## Gini simpson index for genes faceted by cell type (ggplot visualization of data)
+# left_join(multirun_genes_df, multirun_ct_df_summary) %>% 
+#   ggplot(aes(x = gini_simpson_index, y = number_genes)) + 
+#   geom_jitter(height = 0.1, width = 0.01, aes(color = gini_simpson_ct)) + 
+#   facet_wrap(~value) + 
+#   scale_color_viridis_c() + 
+#   theme_bw()
+# 
+# ggplot(multirun_genes_df, aes(x = gini_simpson_index, y = number_genes)) + geom_jitter(height = 0.1, width = 0.01) +
+#   theme_minimal() +
+#   xlab("Gini Simpson Index") + ylab("Number of Genes")
+
+## Filtered rsid for high confidence calls
+selected.gene.rsid <- multirun_genes_df %>% dplyr::filter(number_genes <= 2,
+                                                          gini_simpson_index <= 0.5)
+# save(selected.gene.rsid, file = "/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/gwas_gp_manu_data/gini_simpson_selected.gene.rsid.rda")
+```
+
+
+
+
+```{r}
+######################################
+## What are the PPI found in breast ##
+## Load functions
+source("/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/code/gp_fun_update.R") 
+
+## Get path and file names
+path <- "/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/data/"
+files <- list.files(path = path, pattern = "breast")
+
+gene.consensus.run <- list()
+ct.consensus.run <- list()
+## For each breast GWAS run... do the following
+for(file in files) {
+  ## Message
+  message(paste0("Working on file: ", file))
+  ## Get run group info
+  run.group <- file %>% gsub(pattern = "_ppithres0_092324.rda*", replacement = "", x = .) %>%
+    gsub(pattern = ".*_", replacement = "", x = .) %>% as.numeric()
+  ## Load data
+  load(paste0(path,file))
+  ## Get table of all calls
+  last.gen <- multi.gp[["proposal"]]
+
+  #################################
+  ## Get count for gene by locus ##
+  all.consensus.gene <- list()
+
+  for(n in unique(last.gen$locus)) {
+    spec.locus <- last.gen[which(last.gen$locus == n),] ## filter for spec locus
+    gene.count <- as.data.frame(table(spec.locus$locus, spec.locus$gene)) ## table result
+    gene.count <- gene.count %>% arrange(., desc(Freq)) %>% mutate(rank = 1:nrow(.)) ## rank
+
+    all.consensus.gene[[n]] <- gene.count
+  }
+  all.consensus.gene <- as.data.frame(do.call(rbind, all.consensus.gene)) %>%
+    remove_rownames() %>% mutate(run.group = run.group)
+  ###############################
+  ## Get count for ct by locus ##
+  all.consensus.celltype <- list()
+
+  for(n in unique(last.gen$locus)) {
+    spec.locus <- last.gen[which(last.gen$locus == n),]
+    ct.count <- as.data.frame(table(spec.locus$locus, spec.locus$celltype))
+    ct.count <- ct.count %>% arrange(., desc(Freq)) %>% mutate(rank = 1:nrow(.))
+    all.consensus.celltype[[n]] <- ct.count
+  }
+  all.consensus.celltype <- as.data.frame(do.call(rbind, all.consensus.celltype)) %>%
+    remove_rownames() %>% mutate(run.group = run.group)
+  ## Store result
+  gene.consensus.run[[run.group]] <- all.consensus.gene
+  ct.consensus.run[[run.group]] <- all.consensus.celltype
+}
+
+# save(gene.consensus.run, ct.consensus.run, file = "/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/gwas_gp_manu_data/bca_10run_consensus_fig5.rda")
+
+load("/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/gwas_gp_manu_data/bca_10run_consensus_fig5.rda")
+gene.consensus.run <- as.data.frame(do.call(rbind, gene.consensus.run))
+ct.consensus.run <- as.data.frame(do.call(rbind, ct.consensus.run))
+
+## table the ranks
+locus.gene.count <- as.data.frame(table(gene.consensus.run$Var1,
+                                        gene.consensus.run$Var2,
+                                        gene.consensus.run$rank))
+
+## Find the highest frequency gene for each locus.
+consensus.gene.consensus <- list()
+rsid <- as.character(unique(locus.gene.count$Var1))
+counter <- 1
+for(n in rsid) {
+  message(n)
+  ## Get top call for each locus
+  df <- locus.gene.count %>% dplyr::filter(Var1 == n) %>%
+    dplyr::arrange(desc(Freq)) %>%
+    .[1,]
+  ## Store result
+  consensus.gene.consensus[[counter]] <- df
+  ## Increase counter
+  counter <- counter + 1
+}
+
+consensus.gene.consensus <- as.data.frame(do.call(rbind, consensus.gene.consensus))
+# save(consensus.gene.consensus, file = "/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/gwas_gp_manu_data/consensus.of.consensus.rda")
+
+load("/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/gwas_gp_manu_data/consensus.of.consensus.rda")
+## Get high confidence genes
+load("/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/gwas_gp_manu_data/gini_simpson_selected.gene.rsid.rda") ## load gini_simpson result
+
+high.confid.gene <- consensus.gene.consensus %>% dplyr::filter(Var1 %in% selected.gene.rsid$locus) %>% ## There are 111 high confidence
+  mutate(combo = paste(Var1, Var2, sep = "_"))
+
+consensus.gene <- as.character(high.confid.gene$Var2) ## High confid gene list
+
+## Get PPI
+## Load function list
+source("/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/code/gp_fun_update.R")
+
+## Load PPI database
+load("/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/gwas_gp_manu_data/ppi.map.rda"); rm(map.genes) ## PPI data
+str.db.link <- str.db.link %>% dplyr::select(protein1, protein2, experiments,
+                                             experiments_transferred, combined_score) %>%
+  left_join(x = ., y = str.db.info, by = c("protein1"="string_id")) %>%
+  dplyr::rename("gene1"="gene_symbol") %>%
+  left_join(x = ., y = str.db.info, by = c("protein2"="string_id")) %>%
+  dplyr::rename("gene2"="gene_symbol") %>%
+  .[,c("protein1", "protein2", "gene1", "gene2", "experiments", "experiments_transferred", "combined_score")]
+
+## Filter str.db.link for gene 
+ppi <- str.db.link %>% dplyr::filter(gene1 %in% consensus.gene,
+                                     gene2 %in% consensus.gene) %>% ## Filter for specific genes found in gwas 200kb
+      group_by(grp = paste(pmax(gene1, gene2), pmin(gene1, gene2), sep = "_")) %>%
+      dplyr::filter(row_number() == 1) %>%
+      ungroup() %>%
+      dplyr::select(-grp) %>%
+      distinct()
+
+ppi.adj <- ppi %>% mutate(experiments_score = compute_prior_away(score = experiments),
+                          experiments_transferred_score = compute_prior_away(score = experiments_transferred)) %>%
+      mutate(experiments_both_prior_corrected = 1 - (1 - experiments_score) * (1 - experiments_transferred_score)) %>%
+      mutate(final_score = (experiments_both_prior_corrected * (1 - 0.041)) + 0.041) %>%
+      filter(final_score > .4)
+
+## How many loci participate in ppi?
+ppi.genes <- unique(c(ppi.adj$gene1, ppi.adj$gene2))
+hcgene.w.celltype <- high.confid.gene %>% dplyr::filter(Var2 %in% ppi.genes) %>% ## Keep ppi genes
+  left_join(x = ., y = multirun_ct_df_summary, by = c("Var1"="locus")) ## Add ct information
+
+## Plot data
+el <- ppi.adj %>% dplyr::select(gene1, gene2) %>% as.matrix() ## Get interaction
+g <- graph_from_edgelist(el, directed = FALSE)
+g.res <- igraph::components(g)
+
+## Plot network
+links <- as.data.frame(el)
+
+nodes <- hcgene.w.celltype %>% dplyr::select(Var2, value) %>%
+  distinct()
+
+## Any duplicates? If so find them all
+
+if(any(duplicated(nodes$Var2))) {
+  dup.gene <- nodes[which(duplicated(nodes$Var2)),] %>% pull(Var2) %>% as.character() %>% unique()
+  ## For each dup... do the following
+  for(n in dup.gene) { ## Keep only 1 by randomly sampling
+    dup.in.nodes <- which(nodes$Var2 == n)
+    set.seed(518)
+    rand.select <- sample(x = dup.in.nodes, size = length(dup.in.nodes)-1)
+    nodes <- nodes[-c(rand.select),]
+  }
+}
+
+# Turn it into igraph object
+network <- graph_from_data_frame(d=links, vertices=nodes, directed=F) 
+ 
+# Create a vector of color
+cell.anno <- ditto_colours[c(3,4,6,7,8,9,10,1)]
+cell.anno <- cell.anno[as.numeric(as.factor(V(network)$value))]
+# Create a vector of color for legend
+legend.anno <- ditto_colours[c(3,4,6,7,8,9,10,1)]
+
+# names(cell.anno) <- c("Adipocyte", "Basal", "Fibroblast", "LUM_HR-neg",
+#                       "LUM_HR-pos", "Lymph_EC", "Lymphoid", "Myeloid")
+
+# Make the plot
+set.seed(514)
+plot(network, 
+     vertex.color = cell.anno,
+     vertex.label.color = "black",
+     vertex.label.font = 2,
+     vertex.label.cex = 1.5,
+     vertex.size = 20,
+     edge.width = 4)
+text(c(0.9, -0.4, -1.2, 1.0, 0.15, -0.55), c(0.6, -1.1, 0.6, -0.75, -0.35, -0.30), c("1", "2", "3", "4", "5", "6"), cex = 2, family = 2)
+legend("bottomleft", legend=levels(as.factor(V(network)$value))[1], col = legend.anno[1], bty = "n", pch = 20, pt.cex = 3, cex = 1, 
+       text.col= "black", horiz = TRUE, inset = c(0,0))
+legend("bottomleft", legend=levels(as.factor(V(network)$value))[2], col = legend.anno[2], bty = "n", pch = 20, pt.cex = 3, cex = 1, 
+       text.col= "black", horiz = TRUE, inset = c(0,0.05))
+legend("bottomleft", legend=levels(as.factor(V(network)$value))[3], col = legend.anno[3], bty = "n", pch = 20, pt.cex = 3, cex = 1, 
+       text.col= "black", horiz = TRUE, inset = c(0,0.1))
+legend("bottomleft", legend=levels(as.factor(V(network)$value))[4], col = legend.anno[4], bty = "n", pch = 20, pt.cex = 3, cex = 1, 
+       text.col= "black", horiz = TRUE, inset = c(0,0.15))
+legend("bottomleft", legend=levels(as.factor(V(network)$value))[5], col = legend.anno[5], bty = "n", pch = 20, pt.cex = 3, cex = 1, 
+       text.col= "black", horiz = TRUE, inset = c(0,0.20))
+legend("bottomleft", legend=levels(as.factor(V(network)$value))[6], col = legend.anno[6], bty = "n", pch = 20, pt.cex = 3, cex = 1, 
+       text.col= "black", horiz = TRUE, inset = c(0,0.25))
+legend("bottomleft", legend=levels(as.factor(V(network)$value))[7], col = legend.anno[7], bty = "n", pch = 20, pt.cex = 3, cex = 1, 
+       text.col= "black", horiz = TRUE, inset = c(0,0.3))
+
+
+
+# gene.membership <- as.data.frame(g.res$membership) %>%
+#   'colnames<-' (c("membership")) %>%
+#   rownames_to_column(var = "gene") %>%
+#   left_join(x = nodes, y = ., by = c("Var2"="gene")) %>% ## Add cell type info from the interaction network graphic
+#   distinct()
+# 
+# celltype.distribution.cluster <- as.data.frame(table(gene.membership$membership, gene.membership$value))
+# 
+# 
+# 
+# cell.anno2 <- ditto_colours[c(3:11,1)]
+# names(cell.anno2) <- c("Adipocyte", "Basal", "Blood_EC", "Fibroblast", "LUM_HR-neg",
+#                       "LUM_HR-pos", "Lymph_EC", "Lymphoid", "Vasc.Acc.", "Myeloid")
+# p4 <- ggplot(data = celltype.distribution.cluster, aes(x = Var1, y = Freq, fill = Var2)) +
+#   geom_bar(position = "stack", stat = "identity") +
+#   theme_minimal() +
+#   xlab("Subgraph") + ylab("Frequency") + labs(fill = "") +
+#   scale_fill_manual(values = cell.anno2)
+
+ig <- image_read("/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/figures/consensus_interaction_network.png")
+p3 <- image_ggplot(ig) 
+
+## Remove labels generated from image_ggplot
+p3$labels$x <- "" 
+p3$labels$y <- ""
+p3$data$x <- ""
+p3$data$y <- ""
+
+```
+
+
+```{r}
+layout <- "
+AAABBBDD
+AAABBBDD
+AAABBBDD
+EEEEEEEE
+EEEEEEEE
+EEEEEEEE
+FFFFFFCC
+FFFFFFCC
+"
+
+layout <- "
+AAABBBDD
+AAABBBDD
+AAABBBDD
+CCCCCCCC
+CCCCCCCC
+CCCCCCCC
+CCCCCCCC
+CCCCCCCC
+"
+
+dev.off()
+combined.plot <- p2 + p1 + plot_spacer() + p4 + plot_spacer() + plot_layout(design = layout) + plot_annotation(tag_levels = "A") &
+  theme(legend.position = 'bottom',
+        plot.tag = element_text(face = 'bold', size = 10),
+        axis.text = element_text(size = 8),
+        axis.title = element_text(size = 8),
+        legend.text = element_text(size = 6),
+        legend.title = element_blank()) 
+
+ggsave("/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/figure/figure_6.png", width = 170, height = 170,
+       units = "mm", dpi = 300)
+
+
+layout <- "
+AAAAAAAA
+AAAAAAAA
+AAAAAAAA
+AAAAAAAA
+AAAAAAAA
+AAAAAAAA
+AAAAAAAA
+BBBBBBBB
+"
+
+dev.off()
+combined.plot <- p3 + plot_spacer() + plot_layout(design = layout) &
+  theme(legend.position = 'bottom',
+        plot.tag = element_text(face = 'bold', size = 10),
+        axis.text = element_text(size = 8),
+        axis.title = element_text(size = 8),
+        legend.text = element_text(size = 6),
+        legend.title = element_blank()) 
+
+ggsave("/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/figures/figure_6.png", width = 170, height = 170,
+       units = "mm", dpi = 300)
+
+```
+
+
+
+

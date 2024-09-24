@@ -1,0 +1,341 @@
+---
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r}
+# devtools::install_github('TickingClock1992/RIdeogram')
+# install.packages("magick")
+library("RIdeogram")
+library(magick)
+library(tidyverse)
+library(data.table)
+library(patchwork)
+library(viridis)
+library(cowplot)
+```
+
+```{r load-data}
+data(human_karyotype, package="RIdeogram")
+data(gene_density, package="RIdeogram")
+
+load("/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/gwas_gp_manu_data/kelly.colours.rda")
+
+## Load breast snp data
+load("/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/gwas_gp_manu_data/gwas_snps.rda"); rm(gwas_catalog)
+
+## Prep breast data for idiogram
+bd <- data.frame(Type = "BCa",
+                 Shape = "circle",
+                 Chr = gwas_snps$CHR_ID,
+                 Start = gwas_snps$CHR_POS, 
+                 End = gwas_snps$CHR_POS,
+                 color = "FFC0CB") ## Pink color
+
+## Load and process control snp data
+path <- "/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/gwas_gp_manu_data/control/"
+files <- list.files(path)
+files <- files[grep(pattern = "snp", files)]
+counter <- 1
+
+cd <- list()
+snp.color <- c("514e4c", NA,"777777", "cfc6c1") ## Adding color labels to control 1,2,3. NA is there because control10 is after control1
+
+## Same command as the bd obj but looping through each control file
+for(n in files) {
+  snp.run <- gsub(pattern = "_.*", replacement = "", n)
+  
+  load(paste0(path,n))
+  ctrl <- data.frame(Type = snp.run,
+                     Shape = "box",
+                     Chr = data$CHR_ID,
+                     Start = data$CHR_POS,
+                     End = data$CHR_POS,
+                     color = snp.color[counter])
+  counter <- counter + 1
+  cd[[n]] <- ctrl
+}
+
+cd <- as.data.frame(do.call(rbind, cd)) %>% remove_rownames()
+```
+
+Get characteristics of controls
+```{r}
+## Get characteristic for control 
+
+anno.out <- data.table::fread("/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/code/vsampler/050924/anno.out.txt")
+
+char.cd <- cd %>% dplyr::select(Type, Chr, Start) %>%
+  left_join(x = ., y = anno.out, by = c("Chr"="CHR", "Start"="POS")) %>%
+  dplyr::select(Type, DTCT, inLDvariants_LD8)
+
+## Get nearbygene information for control
+path <- "/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/gwas_gp_manu_data/control/"
+files <- list.files(path)
+files <- files[grep(pattern = "nearbygenes", x = files)]
+
+## Parse through each nearbygene control df to get gene density by locus
+gene_den_ctrl <- list()
+
+for(file in files) {
+  load(paste0(path, file))
+  ctrl.n <- gsub(pattern = "_.*", replacement = "", x = file)
+  df <- as.data.frame(table(nearbygenes_10xgenomics$snp)) %>%
+    mutate(Type = ctrl.n) %>%
+    dplyr::select(Type, Freq) %>%
+    dplyr::rename("Gene_Den"="Freq")
+  gene_den_ctrl[[ctrl.n]] <- df
+}
+## Convert list ot dataframe
+gene_den_ctrl <- as.data.frame(do.call(rbind, gene_den_ctrl)) %>% remove_rownames()
+
+## If the order of each individual observation is the same between the two df. Combine the two together. Type == Type
+if(all(char.cd$Type == gene_den_ctrl$Type)) {
+  char.cd <- cbind(char.cd, gene_den_ctrl) %>% .[,-4]
+  char.cd <- char.cd %>% dplyr::select(Type, DTCT, Gene_Den, inLDvariants_LD8) 
+} else {
+  message("STOP! They do not match. Need to match before combinding")
+}
+
+char.cd$Type <- factor(x = char.cd$Type, levels = paste0("control",1:10))
+  
+control.set <- c("control1", "control2", "control3")
+  
+for(n in control.set) {
+  df <- cd %>% dplyr::filter(Type == n)
+}
+
+###################################
+## Get characteristic for breast ##
+load("/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/gwas_gp_manu_data/geneAnnot.df.rda") ## gene annotation
+load("/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/gwas_gp_manu_data/breast_nearbygenes_200kb_notelmer_10xgenomic_with_LD.rda") ## candidates near snps
+nearbygenes <- nearbygenes_10xgenomics; rm(nearbygenes_10xgenomics)
+
+## Get TSS ##
+#############
+gene.tss <- geneAnnot.df %>% dplyr::select(seqnames, start, gene_name, gene_type)
+## Create empty vector 
+dist.nearby <- vector(mode = "numeric",
+                      length = length(unique(nearbygenes$snp)))
+
+counter <- 1
+for(n in unique(nearbygenes$snp)) { ## loop through each snp and get closest gene to snp length
+  p <- nearbygenes %>% dplyr::filter(snp == n) %>% 
+    pull(distance_tss) %>% abs() %>% ## get distance column and take absolute value
+    min()
+  dist.nearby[counter] <- p
+  
+  ## add counter to move to next vector
+  counter <- counter + 1
+}
+
+dist.nearby <- data.frame(x = dist.nearby) 
+
+## SNPs in LD ##
+################
+load("/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/gwas_gp_manu_data/snpinLD.rda")
+n.ld <- as.data.frame(table(ld$LEAD_SNP))
+
+## Gene density ##
+##################
+ngenes <- as.data.frame(table(nearbygenes$snp))
+
+##################
+## Combine data ##
+
+bca.df <- data.frame(Type = "BCa",
+                     DTCT = dist.nearby$x,
+                     Gene_Den = ngenes$Freq,
+                     inLDvariants_LD8 = c(n.ld$Freq, rep(0, 32)))
+
+bca.df$Condition <- "BCa"
+char.cd$Condition <- "Control"
+
+combined.df <- rbind(bca.df, char.cd)
+anno.color <- c("pink", "grey50")
+names(anno.color) <- c("BCa", "Control")
+
+## Geom ridges for the matched characteristics
+map.characteristics <- data.frame(traits = c("DTCT", "Gene_Den", "inLDvariants_LD8"),
+                                  traits.hr = c("TSS Distance", "Gene Density", "Proxy SNP\nper locus"))
+
+ggridge_combined.df <- combined.df %>% gather(data = ., key = "traits", value = "value", -Type, -Condition) %>%
+  left_join(x = ., y = map.characteristics, by = "traits")
+  
+                
+
+p2 <- ggplot(ggridge_combined.df, aes(x = value, y = Condition)) + geom_density_ridges(alpha = 0.5) +
+  #xlab("Distance in kb             Number of Genes            Number of SNPs") + 
+  xlab("") +
+  ylab("") + labs(fill = "") +
+  #scale_fill_manual(values = anno.color) +
+  facet_wrap(.~traits.hr, scales = "free_x") +
+  #ggtitle("Distribution of Fitness Scoress - Generation 100") +
+  theme_bw() +
+  theme(panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        strip.background = element_blank(),
+        panel.border = element_rect(colour = "black", fill = NA),
+        strip.text.x = element_text(size = 8),
+        axis.text.x = element_text(angle = 45, vjust = 0.5))
+```
+
+Jaccad similarity between nearby genes
+```{r}
+## Get file path for control group
+path <- "/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/gwas_gp_manu_data/control/"
+files <- list.files(path = path, pattern = "nearbygenes")
+
+genelist <- list()
+
+## Get genes in nearbygenes list 
+for(file in files) {
+  ## Load file
+  load(paste0(path, file))
+  ## Get gene list
+  genelist[[file]] <- data.frame(gene = unique(nearbygenes_10xgenomics$gene_name),
+                                 group = gsub(pattern = "_.*", replacement = "", x = file))
+}
+
+genelist <- as.data.frame(do.call(rbind, genelist)) %>% remove_rownames()
+
+## Do the same for the breast cancer data
+load("/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/gwas_gp_manu_data/breast_nearbygenes_200kb_notelmer_10xgenomic_with_LD.rda")
+bca.genelist <- data.frame(gene = unique(nearbygenes_10xgenomics$gene_name),
+                           group = "bca")
+
+## Append two df togther
+combined.genelist <- rbind(bca.genelist, genelist)
+
+#################################
+## Perform similarity function ## Jaccard
+
+## Jaccard function
+jaccard <- function(a, b) {
+    intersection = length(intersect(a, b))
+    union = length(a) + length(b) - intersection
+    return (intersection/union)
+}
+
+## For loop to parse through each and run the jaccard similarity function
+rungroup <- unique(combined.genelist$group)
+jaccard.nearbygenes <- list()
+
+for(n in rungroup) { ## Pick a rungroup
+  fg.rungroup <- combined.genelist %>% dplyr::filter(group == n) %>% pull(gene)
+  for(p in rungroup) { ## Compare that rungroup to other rungroup
+    fg2.rungroup <- combined.genelist %>% dplyr::filter(group == p) %>% pull(gene)
+    
+    res <- data.frame(fg1 = n,
+                      fg2 = p,
+                      jaccard_index = jaccard(fg.rungroup,fg2.rungroup))
+    
+    jaccard.nearbygenes[[paste(n, p, sep = "_")]] <- res
+  }
+}
+
+jaccard.nearbygenes <- as.data.frame(do.call(rbind, jaccard.nearbygenes)) %>% remove_rownames()
+
+
+## Clean up group name to human readable
+jaccard.cleanname <- data.frame(code = c("bca", "control1", "control10", "control2", "control3", "control4",
+                                         "control5", "control6", "control7", "control8", "control9"),
+                                clean = c("BCa", "Control 1", "Control 10", "Control 2", "Control 3", "Control 4",
+                                          "Control 5", "Control 6", "Control 7", "Control 8", "Control 9")
+                                )
+
+## Append clean names to df
+jaccard.nearbygenes <- jaccard.nearbygenes %>% 
+  left_join(x = ., y = jaccard.cleanname, by = c("fg1"="code")) %>% 
+  dplyr::rename("fg1_clean"="clean") %>%
+  left_join(x = ., y = jaccard.cleanname, by = c("fg2"="code")) %>%
+  dplyr::rename("fg2_clean"="clean")
+                                                           
+jaccard.nearbygenes$fg1_clean <- factor(x = jaccard.nearbygenes$fg1_clean,
+                                  levels = c("BCa", "Control 1", "Control 2", "Control 3", "Control 4", "Control 5",
+                                             "Control 6", "Control 7", "Control 8", "Control 9", "Control 10"))
+jaccard.nearbygenes$fg2_clean <- factor(x = jaccard.nearbygenes$fg2_clean,
+                                  levels = rev(c("BCa", "Control 1", "Control 2", "Control 3", "Control 4", 
+                                                 "Control 5", "Control 6", "Control 7", "Control 8", "Control 9",
+                                                 "Control 10")))
+
+p5 <-  ggplot(data = jaccard.nearbygenes, aes(x = fg1_clean, y = fg2_clean)) +
+  geom_tile(size = 1, aes(fill = jaccard_index)) +
+  scale_fill_viridis() +
+  theme_minimal() + xlab("") + ylab("") + labs(fill = "Jaccard\nIndex\n") +
+  theme(axis.text.x = element_text(angle = 90),
+        legend.position = "bottom",
+        legend.title = element_text(size = 6), 
+        legend.text = element_text(size = 6),
+        legend.key.height= unit(2, 'mm'),
+        legend.key.width= unit(4, 'mm'))
+p5
+```
+
+Plot Supplemental Figure 1
+```{r}
+## Code to generate the idiogram
+# combined_data <- rbind(bd, cd) %>% dplyr::filter(Type %in% c("BCa", "control1"))
+# ideogram(karyotype = human_karyotype, overlaid = gene_density, label = combined_data, label_type = "marker")
+# convertSVG("chromosome.svg", device = "png")
+## Rescaled chromosome.png in paint software because extra white space. Just cropped image
+
+ig <- image_read("/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/chromosome.new.png")
+p1 <- image_ggplot(ig)
+## Get rid of weird labels generated with magick transformation
+p1$labels$x <- "" 
+p1$labels$y <- ""
+p1$data$x <- ""
+p1$data$y <- ""
+
+layout <- "
+AAAAAAAA
+AAAAAAAA
+AAAAAAAA
+AAAAAAAA
+AAAAAAAA
+AAAAAAAA
+AAAAAAAA
+BBBBBBBB
+"
+
+
+dev.off()
+combined.plot <- p1 + plot_spacer() + plot_layout(design = layout) &
+  theme(
+        plot.tag = element_text(face = 'bold', size = 10),
+        axis.text = element_text(size = 8),
+        axis.title = element_text(size = 8),
+        legend.text = element_text(size = 8),
+        legend.title = element_text(size = 8)) 
+ggsave("/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/figures/supplemental_figure1.png", width = 170, height = 170,
+       units = "mm", dpi = 300)
+```
+
+Plot Supplemental Figure 2
+```{r}
+layout <- "
+AAAAAABB
+AAAAAABB
+AAAAAABB
+CCCCCCCC
+CCCCCCCC
+CCCCCCCC
+CCCCCCCC
+CCCCCCCC
+"
+
+dev.off()
+combined.plot <- p2 + free(p5) + plot_spacer() + plot_layout(design = layout, guides = "collect") + plot_annotation(tag_levels = "A") &
+  theme(
+        plot.tag = element_text(face = 'bold', size = 10),
+        axis.text = element_text(size = 8),
+        axis.title = element_text(size = 8),
+        legend.text = element_text(size = 6),
+        legend.title = element_text(size = 6)) 
+ggsave("/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/figures/supplemental_figure2.png", width = 170, height = 170,
+       units = "mm", dpi = 300)
+
+```
+

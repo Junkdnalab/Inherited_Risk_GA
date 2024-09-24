@@ -1,0 +1,370 @@
+---
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+```{r load-libraries}
+library(tidyverse)
+library(ggbeeswarm)
+library(patchwork)
+library(ggridges)
+```
+
+```{r load-data}
+## Load all functions used in GA. Not all in use.
+source("/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/code/gp_fun_update.R")
+## Load 1 sample
+load("/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/data/progressive_breast_run_10_ppithres0_092324.rda")
+## Load colors 
+load("/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/gwas_gp_manu_data/kelly.colours.rda")
+load("/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/gwas_gp_manu_data/ditto.colours.rda")
+
+```
+
+Generate plot for mean fitness score
+```{r}
+## Get OF mean 
+of.mean <- getOFmean(data = multi.gp, type = "breast", omic = "yes")
+
+## P1 is objective function on single plot
+fitness.mean.plotdata <- of.mean %>% gather(data = ., key = of, value = score, - gen, -type, -omic) %>%
+  dplyr::filter(of == "fitness")
+
+## Get individual points for fitness score
+individual.fitness.gen <- list()
+gen <- 1:200
+
+for(n in gen) {
+  df <- multi.gp[[n]] %>% dplyr::select(gen, fitness)
+  individual.fitness.gen[[n]] <- df
+}
+
+individual.fitness.gen <- as.data.frame(do.call(rbind, individual.fitness.gen))
+
+## Plot data
+
+p1 <- ggplot(data = individual.fitness.gen, aes(x = gen, y = fitness)) +
+  geom_point(alpha = 0.2, colour = "grey50") +
+  geom_line(data = fitness.mean.plotdata, aes(x = gen, y = score)) + theme_minimal() +
+  xlab("Generation") + ylab("Fitness Score") +
+  scale_x_continuous(breaks = seq(0,200,50)) +
+  geom_vline(xintercept = 123, linetype = "dashed", colour = "red") +
+  theme(panel.grid = element_blank(),
+        axis.line = element_line(colour = "black")) +
+  annotate(geom = "text", x = 123-50, y = 0.43, label = paste0("Gen=123"), color = "red", size = 3)
+```
+
+Generate % change over 5 generations
+```{r}
+## Get vector of fitness score
+fitness.mean <- of.mean %>% dplyr::select(gen, fitness)
+
+## Create a sliding window of 5 to compare... 
+pre <- c(1:5) 
+gen <- median(c(6:10)) ## Earliest comparison centers at generation 8
+post <- c(11:15)
+count <- 1
+
+perc.change.df <- list() ## List to store results in
+
+## While loop to calculate percent change
+while(isFALSE(any(post %in% 201))) {
+  message(paste0("Working on gen ", gen))
+  ## Calculate mean
+  pre.avg <- mean(of.mean$fitness[pre]) ## Calc before fitness score average
+  post.avg <- mean(of.mean$fitness[post]) ## Calc after fitness score average
+  
+  ## Calculae perc diff
+  perc.change <- abs(pre.avg - post.avg) / pre.avg * 100
+  
+  ## Store result in list
+  perc.change.df[[count]] <- data.frame(gen = gen, perc.change = perc.change)
+  
+  ## Update stuff for next loop
+  count <- count + 1
+  pre <- pre + 1
+  gen <- gen + 1
+  post <- post + 1
+}
+
+## Convert list into df
+perc.change.df <- as.data.frame(do.call(rbind, perc.change.df))
+
+## When is change less than 1%?
+perc.change.df$lessthan1 <- perc.change.df$perc.change <= 1.0
+## At gen 138
+
+p2 <- ggplot(data = perc.change.df, aes(x = gen, y = perc.change)) +
+  geom_line() + theme_minimal() +
+  xlab("Generation") + ylab("Percent Change") +
+  xlim(ggplot_build(p1)$layout$panel_scales_x[[1]]$range$range) +
+  geom_vline(xintercept = 123, linetype = "dashed", colour = "red") +
+  theme(panel.grid = element_blank(),
+        axis.line = element_line(colour = "black"))
+```
+
+Create plot of individual fitness score
+```{r}
+## Map df to convert code OF to clean OF names
+map.of <- data.frame(of = c("marker.gene", "magma", "cancer.gene", "ppi", "marker.ppi", "inter.ppi",
+                            "intra.ppi", "lncrna", "promoter", "marker.atac", "common.atac"),
+                     new.of = c("Marker Gene", "MAGMA", "Cancer Gene", "PPI", "Marker PPI", "Inter-PPI",
+                                "Intra-PPI", "LPI", "Promoter", "Marker ATAC", "Common ATAC"))
+
+of.plotdata <- of.mean %>% dplyr::select(-fitness, -type, -omic) %>% 
+  gather(data = ., key = of, value = score, -gen) %>% 
+  left_join(x = ., y = map.of, by = "of")
+
+p4 <- ggplot(data = of.plotdata, aes(x = gen, y = score, group = of)) +
+  geom_line() + theme_minimal() +
+  xlab("Generation") + ylab("OF Score") +
+  geom_label(aes(label = new.of), data = of.plotdata %>% filter(gen == 55), nudge_x = 0.35, size = 2) +
+  theme(panel.grid = element_blank(),
+        axis.line = element_line(colour = "black"))
+```
+
+Initial and final generation gene and cell type
+```{r}
+## p3 and p4 is distribution of gene and cell type respectively
+final <- multi.gp[["proposal"]] %>% dplyr::filter(locus == "rs10941679")
+final.ct <- as.data.frame(table(final$celltype)) %>% mutate(type = "Gen200")
+final.g <- as.data.frame(table(final$gene)) %>% mutate(type = "Gen200")
+
+initial <- multi.gp[["init.proposal"]] %>% dplyr::filter(locus == "rs10941679")
+init.ct <- as.data.frame(table(initial$celltype)) %>% mutate(type = "Gen0")
+init.g <- as.data.frame(table(initial$gene)) %>% mutate(type = "Gen0")
+
+combined.ct <- rbind(final.ct, init.ct)
+combined.ct$type <- factor(x = combined.ct$type, levels = c("Gen0", "Gen200"))
+combined.g <- rbind(final.g, init.g)
+combined.g$type <- factor(x = combined.g$type, levels = c("Gen0", "Gen200"))
+
+combined.g$labels <- as.character(combined.g$Var1)
+## Keep only FGF10 label for Gen200
+for(n in 1:nrow(combined.g)) {
+  if(combined.g[n,"type"] == "Gen0") { ## If not gen200 then next
+    next ## Move onto next
+  } else {
+    if(combined.g[n,"Var1"] != "FGF10") { ## If not FGF10
+      combined.g[n, "labels"] <- "" ## then relabel the label column
+    } else {
+      next
+    }
+  }
+}
+
+combined.ct$labels <- as.character(combined.ct$Var1)
+## Keep only FGF10 label for Gen200
+for(n in 1:nrow(combined.ct)) {
+  if(combined.ct[n,"type"] == "Gen0") { ## If not gen200 then next
+    next ## Move onto next
+  } else {
+    if(combined.ct[n,"Var1"] != "Fibroblast") { ## If not FGF10
+      combined.ct[n, "labels"] <- "" ## then relabel the label column
+    } else {
+      next
+    }
+  }
+}
+
+
+p5 <- ggplot(data = combined.g, aes(fill = Var1, y = Freq, x = type)) +
+  geom_bar(position = 'stack', stat = 'identity') +
+  scale_fill_manual(values = kelly.colours[3:20]) +
+  theme_minimal() + 
+  ylab("Frequency") + xlab("") + labs(fill = "") + guides(fill = "none") +
+  theme(panel.grid = element_blank()) +
+  geom_text(aes(label = labels), color = "black", size = 2.2, 
+            position = position_stack(vjust = 0.5), 
+            show.legend = FALSE)
+
+p6 <- ggplot(data = combined.ct, aes(fill = Var1, y = Freq, x = type)) +
+  geom_bar(position = 'stack', stat = 'identity') +
+  scale_fill_manual(values = ditto_colours[3:20]) +
+  theme_minimal() +
+  ylab("Frequency") + xlab("") + labs(fill = "") + guides(fill = "none") +
+  theme(panel.grid = element_blank()) +
+  geom_text(aes(label = labels), color = "black", size = 2.2, 
+            position = position_stack(vjust = 0.5), 
+            show.legend = FALSE)
+```
+
+Get frequency of top gene and cell type called 
+```{r}
+init.consensus <- get.consensus.run(data = multi.gp[["init.proposal"]], loci = 206)
+final.consensus <- get.consensus.run(data = multi.gp[["proposal"]], loci = 206)
+
+init.consensus$gen <- "Gen0"
+final.consensus$gen <- "Gen200"
+
+combined.consensus <- init.consensus %>% rbind(., final.consensus)
+
+## Get plotdata
+g.consensus <- combined.consensus %>% mutate(type = "gene") %>% 
+  dplyr::select(locus, Freq.x, gen, type) %>%
+  dplyr::rename("calls"="Freq.x")
+ct.consensus <- combined.consensus %>% mutate(type = "celltype") %>% 
+  dplyr::select(locus, Freq.y, gen, type) %>%
+  dplyr::rename("calls"="Freq.y")
+
+combined.plotdata <- rbind(g.consensus, ct.consensus) %>% mutate(combo = paste(gen, type, sep = "_"))
+
+combined.plotdata$gen <- factor(x = combined.plotdata$gen, levels = c("Gen0", "Gen200"))
+
+##############################################
+## Find threshold using high confidence l2g ##
+##############################################
+## Get consensus proposal for breast run
+consensus.proposal <- get.consensus.run(data = multi.gp[["proposal"]], loci = 206)
+
+## Get L2G top gene calls
+library(biomaRt)
+load("/drive-pool/data/peter_data/genetic_programming/l2g.res.rda")
+head(l2g.top)
+l2g.res <- data.frame(chrom = l2g.top$chrom,
+                      start = l2g.top$pos,
+                      end = l2g.top$pos)
+
+## Get snp list from biomart
+ensembl_snp <- useEnsembl(biomart = "snps",
+                          dataset = "hsapiens_snp",
+                          version = "112") 
+# Check version from the website. check bottom left corner https://useast.ensembl.org/index.html
+
+## Load breast data
+load("/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/gwas_gp_manu_data/gwas_snps.rda")
+## Only works with rsid - make sure it's rsid only
+rsid <- gwas_snps$SNP_ID_CURRENT
+
+## Don't need to rerun because save result
+# bm.snp <- getBM(attributes = c('refsnp_id','chr_name','chrom_start','chrom_end','allele'),
+#                 filters = c("snp_filter"),                 
+#                 values = list(rsid),
+#                 mart = ensembl_snp)
+# 
+# bm.snp <- bm.snp[-grep(pattern = "H", x = bm.snp$chr_name),] ## Get rid of scaffold (chr_name that start with H)
+
+## 205 out of 206. whats the missing rsid?
+# save(bm.snp, file = "~/bm.snp.rda")
+load("/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/gwas_gp_manu_data/bm.snp.rda")
+rsid[which(!rsid %in% bm.snp$refsnp_id)] ## rs8176636 ## Not found in hg38 build
+
+## Append biomart gene info from bm.snp to gwas_finemap
+gwas.df <- gwas_snps %>% left_join(x = ., y = bm.snp, by = c("SNP_ID_CURRENT"="refsnp_id"))
+
+## Combine gwas.df with l2g.top by chromosome name and position
+l2g.df.match <- gwas.df %>% left_join(x = ., y = l2g.top, by = c("chr_name"="chrom", "chrom_start"="pos"))
+l2g.df.match <- l2g.df.match %>% dplyr::select(SNP_ID_CURRENT, gene_id, l2g_score)
+
+## Add genome annotation. Convert ENSG to human readable gene name
+load("/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/gwas_gp_manu_data/geneAnnot.df.rda")
+
+## A total of 175 matches between L2G and GWAS SNP
+l2g.gwas <- l2g.df.match %>% left_join(x = ., y = geneAnnot.df, by = "gene_id") %>% 
+  dplyr::select(SNP_ID_CURRENT, gene_id, gene_name, gene_type, l2g_score) %>%
+  na.omit() ## Remove SNP without any matches between gwas and l2g
+
+## Append L2G top genes with consensus genes from breast run
+combined.df <- l2g.gwas %>% left_join(x = ., y = consensus.proposal, by = c("SNP_ID_CURRENT"="locus"))
+
+## Get list of snp with shared gene prediction
+shared.l2g.consensus <- combined.df[which(combined.df$gene_name == combined.df$gene),] %>%
+  dplyr::filter(l2g_score >= 0.70)
+
+nrow(shared.l2g.consensus) ## 42 high confidence L2G
+
+## Capture rate finding threshold (power calculation to find 80% of L2G using threshold and consensus result)
+capture.rate <- round(0.8 * nrow(shared.l2g.consensus), digits = 0)
+
+l2g.thres <- shared.l2g.consensus %>% dplyr::arrange(desc(Freq.x)) %>% ## Arrange l2g scores in order
+  .[c(capture.rate), "Freq.x"] %>% pull(Freq.x) 
+
+## Create a map that shows which rsid are the L2G that have same prediction as consensus
+l2g.map <- data.frame(locus = shared.l2g.consensus$SNP_ID_CURRENT,
+                      L2G = 1)
+
+## Append to combined.plotdata. Will use L2G column for coloring geom_point
+combined.plotdata <- combined.plotdata %>% left_join(x = ., y = l2g.map, by = "locus") %>%
+  mutate(L2G = replace_na(L2G, replace = 0))
+
+combined.plotdata[which(combined.plotdata$gen == "Gen0"), "L2G"] <- 0 ## Convert all Gen0 L2G to 0. We don't want to highlight them
+
+## Color annotation for L2G rsid with same prediction as consensus
+l2g.anno <- c("black", "red")
+names(c("0", "1"))
+
+## Plot proposal frequency for top genes called
+p7 <- combined.plotdata %>% dplyr::filter(type == "gene",
+                                          L2G == "0") %>%
+  ggplot(data = ., aes(x = gen, y = calls, color = as.character(L2G))) +
+  geom_beeswarm(corral = "random", size = 0.25) +
+  geom_beeswarm(data = subset(combined.plotdata, L2G == '1'),
+             aes(x = gen, y = calls, color = as.character(L2G)), size = 0.25, corral = "random") +
+  theme_minimal() + xlab("") + ylab("Fraction of proposal in top genes") + guides(color = FALSE) +
+  scale_color_manual(values = l2g.anno) +
+  theme(panel.grid = element_blank()) +
+  geom_hline(yintercept = l2g.thres, linetype = "dashed", color = "red") + ## Add l2g threshold line
+  annotate(geom = "text", x = "Gen0", y = l2g.thres - 30, label = paste0("n=", l2g.thres), color = "red", size = 3) ## Add text for l2gthres
+
+## Plot proposal frequency for top cell types called
+p8 <- combined.plotdata %>% dplyr::filter(type == "celltype") %>%
+  ggplot(data = ., aes(x = gen, y = calls)) +
+  geom_beeswarm(corral = "random", size = 0.25) +
+  theme_minimal() + xlab("") + ylab("Fraction of proposal in top cell type") +
+  theme(panel.grid = element_blank())
+
+## What is the confidence call using the l2g.thres from p7?
+# table(final.consensus$Freq.x >= l2g.thres) ## 147
+# table(final.consensus$Freq.y >= l2g.thres) ## 118
+```
+
+Plot Figure 2
+```{r}
+layout <- "
+AAACCCCC
+AAACCCCC
+AAACCCCC
+AAACCCCC
+BBBCCCCC
+DDDDDDDD
+DDDDDDDD
+DDDDDDDD"
+
+dev.off()
+combined_plot1 <- p1 + p2 + p4 + plot_spacer() + plot_layout(design=layout, guides = "collect") + plot_annotation(tag_levels = "A") &
+  theme(legend.position = 'bottom',
+        plot.tag = element_text(face = 'bold', size = 10),
+        axis.text.x = element_text(size = 8),
+        axis.text.y = element_text(size = 8),
+        axis.title = element_text(size = 8),
+        legend.text = element_text(size = 8)) 
+# combined_plot
+ggsave("/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/figures//figure_2.png", width = 170, height = 170,
+       units = "mm", dpi = 300)
+```
+
+Plot Figure 3
+```{r}
+layout <- "
+AAAABBBB
+AAAABBBB
+AAAABBBB
+CCCCDDDD
+CCCCDDDD
+CCCCDDDD
+EEEEEEEE
+EEEEEEEE"
+
+dev.off()
+combined_plot1 <- p7 + p8 + p5 + p6 + plot_spacer() + plot_layout(design=layout, guides = "collect") + plot_annotation(tag_levels = "A") &
+  theme(legend.position = 'bottom',
+        plot.tag = element_text(face = 'bold', size = 10),
+        axis.text.x = element_text(size = 8),
+        axis.text.y = element_text(size = 8),
+        axis.title = element_text(size = 8),
+        legend.text = element_text(size = 8)) 
+# combined_plot
+ggsave("/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/figures/figure_3.png", width = 170, height = 170,
+       units = "mm", dpi = 300)
+```
+

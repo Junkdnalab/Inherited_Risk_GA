@@ -1,0 +1,275 @@
+---
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+Load libraries
+```{r}
+library(tidyverse)
+library(data.table)
+library(patchwork)
+library(ggridges)
+
+load("/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/gwas_gp_manu_data/kelly.colours.rda")
+```
+
+Trace plot for all BCa (10) and control run (100)
+```{r}
+
+## Take a couple minutes to run. Save result in an rda file for faster processing
+# files <- "/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/data/"
+# control_group <- paste0("control", c(1:3))
+# run_group <- paste0("run_", c(1:10))
+# 
+# 
+# fitness.score <- list()
+# 
+# ## Generate trace plot for fitness score ##
+# ###########################################
+# for(ctrl in control_group) {
+#   for(rg in run_group) {
+#     ## load file
+#     groupname <- paste0(ctrl,"_",rg)
+#     message(paste0("Working on ", groupname))
+#     load(paste0(files,"progressive_",ctrl,"_",rg,"_ppithres0_092324.rda"))
+#     ## Process data
+#     df <- as.data.frame(do.call(rbind, multi.gp[1:200])) %>%
+#       dplyr::select(n, fitness, gen) %>%
+#       dplyr::group_by(gen) %>%
+#       dplyr::summarise(fitness = mean(fitness)) %>%
+#       dplyr::ungroup() %>%
+#       mutate(type = paste0(ctrl,"_",rg)) %>%
+#       as.data.frame()
+#     ## Store data
+#     fitness.score[[groupname]] <- df
+#   }
+# }
+# save(fitness.score, file = "/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/gwas_gp_manu_data/fitness.score_fig3_control.rda")
+load("/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/gwas_gp_manu_data/fitness.score_fig3_control.rda")
+
+## Convert list to df
+plotdata <- as.data.frame(do.call(rbind, fitness.score))
+plotdata$control <- gsub(pattern = "_.*", replacement = "", x = plotdata$type)
+
+## Do the same thing for breast like control in the code above
+# fitness.score <- list()
+# 
+# control_group <- paste0("breast")
+# run_group <- paste0("run_", c(1:10))
+# 
+# ## Generate trace plot for fitness score ##
+# ###########################################
+# for(ctrl in control_group) {
+#   for(rg in run_group) {
+#     ## load file
+#     groupname <- paste0(ctrl,"_",rg)
+#     message(paste0("Working on ", groupname))
+#     load(paste0(files,"progressive_",ctrl,"_",rg,"_ppithres0_092324.rda"))
+#     ## Process data
+#     df <- as.data.frame(do.call(rbind, multi.gp[1:200])) %>%
+#       dplyr::select(n, fitness, gen) %>%
+#       dplyr::group_by(gen) %>%
+#       dplyr::summarise(fitness = mean(fitness)) %>%
+#       dplyr::ungroup() %>%
+#       mutate(type = paste0(ctrl,"_",rg)) %>%
+#       as.data.frame()
+#     ## Store data
+#     fitness.score[[groupname]] <- df
+#   }
+# }
+#save(fitness.score, file = "/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/gwas_gp_manu_data/fitness.score_fig3_breast.rda")
+load("/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/gwas_gp_manu_data/fitness.score_fig3_breast.rda")
+fg.fitness <- as.data.frame(do.call(rbind, fitness.score))
+
+fg.data <- fg.fitness %>% mutate(group = "breast")
+ctrl.data <- plotdata %>% dplyr::select(gen, fitness, type) %>%
+  mutate(group = "control")
+
+combined.plotdata <- rbind(fg.data, ctrl.data)
+
+p1 <- ggplot(data = combined.plotdata, aes(x = gen, y = fitness, group = type, color = group)) +
+  geom_line(show.legend = FALSE) +
+  theme_minimal() + 
+  scale_color_manual(values = c("pink", "grey50")) +
+  xlab("Generation") + ylab("Fitness Score") +
+  guides(group="none") +
+  theme(legend.position = "none",
+        panel.grid = element_blank(),
+        axis.line = element_line(colour = "black"))
+
+```
+
+Enrichment of OF between breast cancer and control set
+```{r}
+################################################
+# Code to plot individual scores for all runs ##
+# Code commented out below do not need to be run again. Data was saved to speed up figure making
+## Path to files
+files <- "/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/data/"
+## Variables for loop
+control_group <- paste0("control", c(1:3))
+run_group <- paste0("run_", c(1:10))
+
+of.score <- list() ## Store result in list
+
+## Generate trace plot for fitness score ##
+###########################################
+for(ctrl in control_group) {
+  for(rg in run_group) {
+    ## load file
+    groupname <- paste0(ctrl,"_",rg)
+    message(paste0("Working on ", groupname))
+    load(paste0(files,"progressive_",ctrl,"_",rg,"_ppithres0_092324.rda"))
+    ## Process data
+    df <- as.data.frame(do.call(rbind, multi.gp[200])) %>%
+      mutate(type = paste0(ctrl,"_",rg))
+    ## Store data
+    of.score[[groupname]] <- df
+  }
+}
+# save(of.score, file = "/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/gwas_gp_manu_data/of.score_fig4.rda")
+load("/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/gwas_gp_manu_data/of.score_fig4.rda")
+
+ctrl.of.score <- as.data.frame(do.call(rbind, of.score)) %>%
+  remove_rownames() %>% 
+  gather(data = ., key = "of", value = "score", -n, -gen, -type) %>%
+  mutate(Type = "Control")
+
+## Extract the of score for breast
+
+control_group <- paste0("breast")
+run_group <- paste0("run_", c(1:10))
+
+
+of.score <- list()
+
+## Generate trace plot for fitness score ##
+###########################################
+for(ctrl in control_group) {
+  for(rg in run_group) {
+    ## load file
+    groupname <- paste0(ctrl,"_",rg)
+    message(paste0("Working on ", groupname))
+    load(paste0(files,"progressive_",ctrl,"_",rg,"_ppithres0_092324.rda"))
+    ## Process data
+    df <- as.data.frame(do.call(rbind, multi.gp[200])) %>%
+      mutate(type = paste0(ctrl,"_",rg))
+    ## Store data
+    of.score[[groupname]] <- df
+  }
+}
+
+bca.of.score <- as.data.frame(do.call(rbind, of.score)) %>% 
+  remove_rownames() %>%
+  gather(data = ., key = "of", value = "score", -n, -gen, -type) %>%
+  mutate(Type = "BCa")
+
+## Map df to convert code OF to clean OF names
+map.of <- data.frame(of = c("marker.gene", "magma", "cancer.gene", "ppi", "marker.ppi", "inter.ppi",
+                            "intra.ppi", "lncrna", "promoter", "marker.atac", "common.atac"),
+                     new.of = c("Marker Gene", "MAGMA", "Cancer Gene", "PPI", "Marker PPI", "Inter-PPI",
+                                "Intra-PPI", "LPI", "Promoter", "Marker ATAC", "Common ATAC"))
+
+of_combined_data <- rbind(bca.of.score, ctrl.of.score) %>% dplyr::filter(of != "fitness") %>%
+  left_join(x = ., y = map.of, by = "of")
+type.color <- c("pink", "grey")
+names(type.color) <- c("BCa", "Control")
+
+## Get average score and input loci number by group
+of_bca_control_beta_input <- of_combined_data %>% dplyr::group_by(Type, of) %>%
+  dplyr::summarise(avg_score = mean(score)) %>% ## calculate avg
+  mutate(nloci = case_when(Type == "BCa" ~ 206, ## nloci by condition
+                           Type == "Control" ~ 176),
+         hits = avg_score * nloci, ## Get number of hits
+         nohits = nloci - hits) ## Get number of no hits
+
+n <- 1e5 ## How many simulations in rbeta
+
+gen200.of.beta <- list()
+
+for(p in 1:nrow(of_bca_control_beta_input)) {
+  df.of <- of_bca_control_beta_input[p,] ## Select specific row to perform beta distribution
+  
+  rbeta.df <- data.frame(prob = rbeta(n = n, shape1 = as.numeric(df.of[,"hits"]), shape2 = as.numeric(df.of[,"nohits"])),
+                         of = as.character(of_bca_control_beta_input[p,"of"]),
+                         Type = as.character(of_bca_control_beta_input[p,"Type"]))
+  gen200.of.beta[[p]] <- rbeta.df
+}
+
+gen200.of.beta <- as.data.frame(do.call(rbind, gen200.of.beta)) %>% remove_rownames() %>%
+  left_join(x = ., y = map.of, by = "of")
+
+p2 <- ggplot(gen200.of.beta, aes(x = prob, y = new.of, fill = Type)) + geom_density_ridges(alpha = 0.5) +
+  xlab("Probability Distribution") + ylab("") + #guides(fill = "none") +
+  scale_fill_manual(values = type.color) +
+  #ggtitle("Distribution of Fitness Scoress - Generation 100") +
+  theme_minimal() +
+  theme(axis.text.y = element_text(size = 8),
+        panel.grid = element_blank(),
+        axis.title.x = element_text(vjust = 0.2))
+
+
+
+## Calculating enrichment and significance 
+CI <- 0.025 ## Confidence interval of 95%
+
+es.pval.bca.ctrl <- list() 
+for(n in unique(gen200.of.beta$of)) {
+  bca.beta <- gen200.of.beta %>% dplyr::filter(of == n,
+                                               Type == "BCa")
+  ctrl.beta <- gen200.of.beta %>% dplyr::filter(of == n,
+                                                 Type == "Control")
+  diff.beta <- bca.beta$prob - ctrl.beta$prob ## fg-bg
+  
+  sig_fg_bg <- sum(diff.beta < 0 ) ## out of 1e5 simulations, how many times is fg-bg less than 0
+  ## process and store result
+  rbeta.res <- data.frame(of = n, 
+                          new.of = bca.beta[1,"new.of"],
+                          signif = sig_fg_bg,
+                          pval = sig_fg_bg/1e5,
+                          lower.lim = quantile(diff.beta, CI), ## 95% credible interval
+                          median = quantile(diff.beta, 0.5),
+                          upper.lim = quantile(diff.beta, 1-CI))
+  es.pval.bca.ctrl[[n]] <- rbeta.res
+} 
+
+es.pval.bca.ctrl <- as.data.frame(do.call(rbind, es.pval.bca.ctrl)) %>% remove_rownames()
+
+# save(es.pval.bca.ctrl, gen200.of.beta, file = "/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/gwas_gp_manu_data/of.beta.figure4.rda")
+
+
+
+
+```
+
+
+Plot graph
+```{r}
+## Plot layout
+layout <- "
+AAAAAAAA
+AAAAAAAA
+AAAAAAAA
+BBBBBBBB
+BBBBBBBB
+BBBBBBBB
+BBBBBBBB
+BBBBBBBB
+"
+
+
+
+
+dev.off()
+combined.plot <- free(p1) + p2 + plot_layout(design = layout) + plot_annotation(tag_levels = "A") &
+  theme(legend.position = 'bottom',
+        plot.tag = element_text(face = 'bold', size = 10),
+        axis.text = element_text(size = 8),
+        axis.title = element_text(size = 8),
+        legend.text = element_text(size = 6),
+        legend.title = element_blank()) 
+
+ggsave("/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/figures/figure_4.png", width = 85, height = 170,
+       units = "mm", dpi = 300)
+```
+
