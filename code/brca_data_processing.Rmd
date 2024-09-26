@@ -1,0 +1,562 @@
+---
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r libraries}
+suppressMessages(c(
+  library(tidyverse),
+  library(data.table),
+  library(motifbreakR, include.only = "snps.from.rsid"),
+  library(SNPlocs.Hsapiens.dbSNP155.GRCh38),
+  library(BSgenome.Hsapiens.UCSC.hg38),
+  library(parallel),
+  library(quantsmooth),
+  library(pheatmap),
+  library(GenomicRanges),
+  library(sctransform),
+  library(Seurat),
+  library(HGNChelper),
+  library(ArchR),
+  library(dampack)
+))
+```
+
+Identification of candidate genes (nearby gene set)
+```{r}
+## Load RNA-seq data
+rna <- readRDS("/drive-pool/data/peter_data/sc_data/brca/GSE168836/GSE168836_Sobj_Final_Scaled_MetaUpdt_V2.rds")
+## sctransform
+sct_rna <- SCTransform(rna, vst.flavor = "v2", verbose = TRUE,
+                       return.only.var.genes = TRUE)
+#save(sct_rna, file = "/drive-pool/data/peter_data/genetic_programming/code/brca/sct_rna.rda")
+
+################################
+## Find Nearby Genes from SNP ##
+## Create df object using processed gtf.v38.mapped.gene
+
+## Load gtf file used in alignment
+gtf <- import("/drive-pool/data/peter_data/genetic_programming/shared_data/refdata-gex-GRCh38-2020-A/genes/genes.gtf")
+
+gtf.df <- gtf %>% as.data.frame() %>% 
+  dplyr::filter(type == "gene",
+                gene_type %in% c("protein_coding", "lncRNA"))
+
+dup.genes <- gtf.df[which(duplicated(gtf.df$gene_name)),]$gene_name
+
+for(n in dup.genes) {
+  dup <- gtf.df %>% dplyr::filter(gene_name %in% n) %>% arrange(., gene_version) ## Arrange version by increasing order
+  
+  dup.rm <- which(gtf.df$gene_name == dup[1,"gene_name"] & ## Which row needs to be removed
+        gtf.df$gene_version == dup[1,"gene_version"])
+  
+  gtf.df <- gtf.df[-dup.rm,] ## Remove it from gtf.df
+}; rm(dup, dup.rm); gc()
+
+## Checking for dups with table option --> No more dups
+table(duplicated(gtf.df$gene_name)) 
+
+## Create gene annotation dataframe
+geneAnnot.df <- gtf.df %>% dplyr::select(seqnames,
+                                         start,
+                                         end,
+                                         strand,
+                                         gene_name,
+                                         gene_type)
+
+## Get transcription start site based on strand info
+geneAnnot.df$tss <- NA
+geneAnnot.df[which(geneAnnot.df$strand == "+"), "tss"] <- geneAnnot.df[which(geneAnnot.df$strand == "+"), "start"]
+geneAnnot.df[which(geneAnnot.df$strand == "-"), "tss"] <- geneAnnot.df[which(geneAnnot.df$strand == "-"), "end"]
+geneAnnot.df$seqnames <- as.character(geneAnnot.df$seqnames)
+
+# save(geneAnnot.df, file = "/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/gwas_gp_manu_data/geneAnnot.df.rda")
+
+## Prep data for finding nearest genes
+load("/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/gwas_gp_manu_data/geneAnnot.df.rda") ## gene annotation
+load("/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/gwas_gp_manu_data/gwas_snps.rda") ## GWAS snp
+load("/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/gwas_gp_manu_data/snpinLD.rda") ## Snps in LD with GWAS snp
+
+## Simplify df to only include relevant column. Also, add column to say what SNPs have LD
+snps.df <- gwas_snps %>% dplyr::select(CHR_ID, CHR_POS, SNP_ID_CURRENT) %>%
+  dplyr::rename("seqnames"="CHR_ID", "start"="CHR_POS", "SNP_id"="SNP_ID_CURRENT") %>% ## Rename columns
+  mutate(seqnames = paste0("chr", seqnames)) %>% ## add chr before chromosome id
+  distinct() %>% ## Keep unique observations
+  left_join(x = ., ## What lead SNPs have snps in ld
+            y = data.frame(SNP_id = unique(ld$LEAD_SNP),
+                           LD = 1),
+            by = "SNP_id") %>%
+  mutate(LD = replace_na(LD, replace = 0))
+
+## Create df to show range of each lead snp based on all SNPs in LD. We are doing this because
+## we are trying to include all snps because we don't know the casual snp. This is just the first 
+## pass of trying it.
+ldsnps.range <- ld %>% dplyr::group_by(LEAD_SNP) %>%
+  dplyr::summarise(min = min(CHR_POS),
+                   max = max(CHR_POS))
+
+## gene TSS dataframe
+gene.tss <- geneAnnot.df %>% dplyr::select(seqnames, tss, gene_name, gene_type)
+
+## Generate a list of chrid, pos, rsid, and ld status for the mclapply "nearbygene"
+gwas.list <- as.list(as.data.frame(t(snps.df[, c("seqnames", "start", "SNP_id", "LD")])))
+
+distance_thres <- 2e5 ## Distance threshold is 200kb from snp left and right
+
+elmer.style <- FALSE ## Elmer style is just what the package elmer does. Picks X ngenes left and right of chr position of interest
+
+min.genes <- 10 ## Set the min ngenes a lead snp should have. only needed when elmer.style is false
+
+nearbygenes <- mclapply(X = gwas.list, FUN = function(x) {
+  
+  gA.filter <- gene.tss %>% dplyr::filter(seqnames == x[1])
+  
+  if(x[4] == "0") { ## If there is no SNP in LD. Use the CHR_POS
+    ## No SNP, get all genes within distance threshold left and right of snp (400kb window)
+    ## If less than 10 genes, keep expanding until you get 10 genes total (5 left and 5 right)
+    
+    ## Work on right side of SNP (downstream)
+    Rside <- gA.filter %>% dplyr::filter(tss >= as.numeric(x[2])) %>%
+      mutate(distance_tss = tss - as.numeric(x[2])) %>%
+      arrange(., distance_tss)
+    if(elmer.style == TRUE) {
+      if(nrow(Rside) > 4) {
+        Rside <- Rside[1:5,]
+        }
+      } else { ## If elmer style is FALSE do this
+        
+        if(!is.null(min.genes)) { ## If there is a min.gene... do this
+          Rgenes <- Rside %>% dplyr::filter(distance_tss <= distance_thres) ## Check how many genes after dist.thres filtering
+          if(nrow(Rgenes) > 4) { ## If there are more than 5 genes...
+            Rside <- Rgenes ## Don't change anything
+          } else { ## If less than 5, gather genes based on min.genes
+            Rside <- Rside[1:(min.genes/2),]
+            }
+        } else { ## if min.gene is null (no elmer style)
+          Rside <- Rside %>% dplyr::filter(distance_tss <= distance_thres)
+        }
+      }
+    
+    if(nrow(Rside) == 0) {
+      ## Do nothing
+      } else {
+        Rside <- Rside %>% mutate(snp = x[3],
+                                  side = paste0("R", c(1:nrow(.))))
+      }
+    
+    ## Work on left side of SNP (upstream)
+    Lside <- gA.filter %>% dplyr::filter(tss < as.numeric(x[2])) %>%
+      mutate(distance_tss = tss - as.numeric(x[2])) %>%
+      arrange(., desc(distance_tss))
+    if(elmer.style == TRUE) {
+      if(nrow(Lside) > 4) {
+        Lside <- Lside[1:5,]
+        }
+      } else {
+        if(!is.null(min.genes)) { ## If there is a min.gene... do this
+          Lgenes <- Lside %>% dplyr::filter(distance_tss >= -distance_thres) ## Check how many genes after dist.thres filtering
+          if(nrow(Lgenes) > 4) { ## If there are more than 5 genes...
+            Lside <- Lgenes ## Don't change anything
+          } else { ## If less than 5, gather genes based on min.genes
+            Lside <- Lside[1:(min.genes/2),]
+            }
+        } else { ## if min.gene is null (no elmer style)
+          Lside <- Lside %>% dplyr::filter(distance_tss >= -distance_thres)
+        }
+      }
+    
+  if(nrow(Lside) == 0) {
+    ## Do nothing
+  } else {
+    Lside <- Lside %>% arrange(., distance_tss) %>%
+      mutate(snp = x[3],
+             side = paste0("L", rev(c(1:nrow(.)))))
+  }
+  } ## End of no SNP in LD function
+  
+  if(x[4] == "1") { ## If there is SNP in LD. Use the MIN and MAX CHR_POS based on all snps
+    ## Get the min and max CHR_POS from the set of SNPS in LD.
+    ## Expand coords by distance_thres
+    ## Use new range to gather nearby genes
+    spec.snp.range <- ldsnps.range %>% dplyr::filter(LEAD_SNP == x[3]) %>% dplyr::select(min, max) %>%
+      as.numeric()
+    ## Expand coords by distance thres. Subtract left and add right
+    spec.snp.range[1] <- spec.snp.range[1] - 2e5
+    spec.snp.range[2] <- spec.snp.range[2] + 2e5
+    ## Find midpoint from that range now.
+    mid.point.range <- round(mean(spec.snp.range), digit = 0) ## Find midpoint and round to the nearest whole number
+    
+    ## Work on right side of SNP (downstream)
+    Rside <- gA.filter %>% dplyr::filter(tss >= as.numeric(mid.point.range)) %>%
+      mutate(distance_tss = tss - as.numeric(mid.point.range)) %>%
+      arrange(., distance_tss)
+    if(elmer.style == TRUE) {
+      if(nrow(Rside) > 4) {
+        Rside <- Rside[1:5,]
+        }
+      } else {
+        ## distance thres is abs(mid-spec.snp.range[1/2])
+        if(!is.null(min.genes)) { ## If there is a min.gene... do this
+          Rgenes <- Rside %>% dplyr::filter(distance_tss <= (spec.snp.range[2] - mid.point.range)) ## Check how many genes after dist.thres filtering
+          if(nrow(Rgenes) > 4) { ## If there are more than 5 genes...
+            Rside <- Rgenes ## Don't change anything
+          } else { ## If less than 5, gather genes based on min.genes
+            Rside <- Rside[1:(min.genes/2),]
+            }
+        } else { ## if min.gene is null (no elmer style)
+          Rside <- Rside %>% dplyr::filter(distance_tss <= (spec.snp.range[2] - mid.point.range))
+        }
+      }
+    
+    if(nrow(Rside) == 0) {
+      ## Do nothing
+      } else {
+        Rside <- Rside %>% mutate(snp = x[3],
+                                  side = paste0("R", c(1:nrow(.))))
+      }
+    
+    ## Work on left side of SNP (upstream)
+    Lside <- gA.filter %>% dplyr::filter(tss < as.numeric(mid.point.range)) %>%
+      mutate(distance_tss = tss - as.numeric(mid.point.range)) %>%
+      arrange(., desc(distance_tss))
+    if(elmer.style == TRUE) {
+      if(nrow(Lside) > 4) {
+        Lside <- Lside[1:5,]
+        }
+      } else {
+        if(!is.null(min.genes)) { ## If there is a min.gene... do this
+          Lgenes <- Lside %>% dplyr::filter(distance_tss >= (spec.snp.range[1] - mid.point.range)) ## Check how many genes after dist.thres filtering
+          if(nrow(Lgenes) > 4) { ## If there are more than 5 genes...
+            Lside <- Lgenes ## Don't change anything
+          } else { ## If less than 5, gather genes based on min.genes
+            Lside <- Lside[1:(min.genes/2),]
+            }
+        } else { ## if min.gene is null (no elmer style)
+          Lside <- Lside %>% dplyr::filter(distance_tss >= (spec.snp.range[1] - mid.point.range))
+        }
+      }
+    
+  if(nrow(Lside) == 0) {
+    ## Do nothing
+  } else {
+    Lside <- Lside %>% arrange(., distance_tss) %>%
+      mutate(snp = x[3],
+             side = paste0("L", rev(c(1:nrow(.)))))
+  }
+  
+  } ## End of SNP in LD function
+  
+  ###############################
+  ## Combine R and L side gene ##
+  ###############################
+  if(nrow(Rside) > 0 & nrow(Lside) > 0) { ## Store both
+    res <- rbind(Lside, Rside)
+  } else if (nrow(Rside) == 0 & nrow(Lside) > 0) { ## If no Rside, only store Lside
+    res <- Lside
+  } else if ((nrow(Rside) > 0 & nrow(Lside) == 0)) { ## If no Lside, only store Rside
+    res <- Rside
+  }
+  
+},
+mc.cores = 20
+)
+
+nearbygenes_10xgenomics <- as.data.frame(do.call(rbind, nearbygenes))
+## Sometimes there are no more genes at the tail end of the chromosome. Those will come back as NA. Remove NAs
+nearbygenes_10xgenomics <- na.omit(nearbygenes_10xgenomics)
+save(nearbygenes_10xgenomics, file = "/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/gwas_gp_manu_data/breast_nearbygenes_200kb_notelmer_10xgenomic_with_LD.rda")
+```
+
+Generate Marker Gene OF
+```{r}
+load("/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/gwas_gp_manu_data/sct_rna.rda") ## Load sctransform data
+
+## Filter for CF data ##
+sct_rna$SampleType = ifelse(grepl("CF", sct_rna@meta.data$orig.ident), "CF", "TM")
+Idents(sct_rna) <- sct_rna@meta.data[["CellType"]]
+sct_rna <- subset(x = sct_rna, subset = SampleType == "CF") 
+
+## Get unique cell type annotation
+celltype <- unique(as.character(sct_rna@meta.data[["CellType"]]))
+
+## Marker list to store result
+marker.list <- list()
+
+## Using seurat findmarkers to do cell to cell comparison
+for(n in celltype) {
+  for(p in celltype) {
+    if(n == p) { ## If comparison is same cell type, next
+      next
+    } else { ## If not the same cell type, find markers
+    message(paste0("Working on celltype ", n, " vs ", p))
+    vs.group <- paste(n,"vs",p, sep = "_")
+      marker <- FindMarkers(sct_rna, assay = "SCT", ident.1 = n, ident.2 = p, test.use = "wilcox",
+                        only.pos = TRUE)
+      marker <- marker %>% rownames_to_column(var = "gene") %>%
+        mutate(celltype1 = n,
+               celltype2 = p)
+  marker.list[[vs.group]] <- marker
+    }
+  }
+}
+
+marker.list <- as.data.frame(do.call(rbind, marker.list))
+# save(marker.list, sct_rna, file = "/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/gwas_gp_manu_data/breast_sct_marker.list_pairwise.rda")
+rm(list = ls(all.names = T)); gc()
+load("/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/gwas_gp_manu_data/breast_sct_marker.list_pairwise.rda"); rm(sct_rna)
+
+## Filter the adj pvalue for significance (<= 0.05) and log2fc 0.25
+marker.filtered <- marker.list %>% remove_rownames() %>% dplyr::filter(p_val_adj <= 0.05) %>% 
+  dplyr::filter(avg_log2FC >= 0.25)
+
+## Filter df for relevant column
+marker.hits <- marker.filtered %>% dplyr::select(gene, celltype1) %>% 
+  dplyr::rename("celltype"="celltype1") %>%
+  distinct() 
+
+# save(marker.hits, file = "/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/gwas_gp_manu_data/breast_marker.list.rda")
+
+##############################################################
+## Find marker relative to all other celltypes (background) ##
+marker.list <- list()
+
+for(n in celltype) { ## Same as cell to cell comparison
+  message(paste0("Working on celltype ", n))
+  marker <- FindMarkers(sct_rna, assay = "SCT", ident.1 = n, ident.2 = NULL, test.use = "wilcox",
+                        only.pos = TRUE)
+  marker <- marker %>% rownames_to_column(var = "gene") %>%
+    mutate(celltype = n)
+  marker.list[[n]] <- marker
+}
+
+## Seurat finder result
+marker.list <- as.data.frame(do.call(rbind, marker.list))
+
+## Filtered based on padj <= 0.05 and log2fc >= 0.025
+marker.filtered <- marker.list %>% remove_rownames() %>% 
+  dplyr::filter(p_val_adj <= 0.05,
+                avg_log2FC >= 0.25)
+
+marker.hits <- marker.filtered %>% dplyr::select(gene, celltype) %>%
+  distinct() 
+
+save(marker.list, marker.hits, file = "/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/gwas_gp_manu_data/marker.list.bg.rda")
+```
+
+Generate Promoter OF
+```{r}
+## Load data
+## Nearby genes list
+load("/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/gwas_gp_manu_data/breast_nearbygenes_200kb_notelmer_10xgenomic_with_LD.rda")
+nearbygenes <- nearbygenes_10xgenomics; rm(nearbygenes_10xgenomics)
+## GWAS SNPs
+load("/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/gwas_gp_manu_data/gwas_snps.rda")
+## SNPs in LD with GWAS SNPs
+load("/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/gwas_gp_manu_data/snpinLD.rda")
+
+## Get atac-seq probes and make into granges
+genes.granges <- GRanges(seqnames = Rle(nearbygenes$seqnames),
+                       range = IRanges(start = nearbygenes$tss),
+                       gene = nearbygenes$gene_name)
+genes.granges <- unique(genes.granges)
+
+## Get promoter granges (1kb up 100bp down)
+promoter.granges <- promoters(genes.granges, upstream = 1000, downstream = 100)
+
+## Make gwas snps into granges
+all.snps <- gwas_snps[,c("CHR_ID", "CHR_POS", "SNP_ID_CURRENT")] %>%
+  dplyr::rename("SNPS"="SNP_ID_CURRENT") %>%
+  rbind(.,
+        ld[,c("CHR_ID", "CHR_POS", "SNPS")]) %>%
+  distinct()
+
+gwas <- GRanges(seqnames = Rle(paste0("chr", all.snps$CHR_ID)),
+                range = IRanges(start = as.numeric(all.snps$CHR_POS) - 500,
+                                end = as.numeric(all.snps$CHR_POS) + 499),
+                locus = all.snps$SNPS,
+                chr_pos = as.numeric(all.snps$CHR_POS))
+
+## Find overlaps between snp and promoter region
+hits <- findOverlaps(query = gwas, subject = promoter.granges)
+
+## Create promoter df based on hits object
+promoter.df <- cbind(as.data.frame(gwas) %>% .[hits@from,],
+                       as.data.frame(promoter.granges) %>% .[hits@to,]) %>%
+  remove_rownames() %>%
+  dplyr::select(locus, gene) %>%
+  mutate(promoter = 1) %>%
+  left_join(x = ., 
+            y = distinct(ld[,c("SNPS", "LEAD_SNP")]), 
+            by = c("locus"="SNPS"))
+
+## Anything that is NA in LEAD_SNP is column the locus is the lead snp
+promoter.df[which(is.na(promoter.df$LEAD_SNP)), "LEAD_SNP"] <- promoter.df[which(is.na(promoter.df$LEAD_SNP)), "locus"] 
+
+# save(promoter.df, file = "/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/gwas_gp_manu_data/ld_promoter.df.rda")
+```
+
+Fusion Gene Objective Function
+```{r}
+rm(list = ls(all.names = T)); gc()
+
+## Downloaded from COSMIC. https://cancer.sanger.ac.uk/cosmic/fusion. save table as txt file
+fusion.gene <- fread("/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/gwas_gp_manu_data/breast_cosmic_fusion.txt")
+
+## Process the data to split gene pair column into two separate genes
+fusion.gene <- fusion.gene %>% dplyr::select(genepair) %>%
+  separate(genepair, sep = " / ", c("protein1", "protein2")) %>%
+  mutate(protein1 = gsub(pattern = "_.*", replacement = "", x = protein1),
+         protein2 = gsub(pattern = "_.*", replacement = "", x = protein2)) %>% 
+  distinct()
+
+## Keep unique
+fusion.gene <- data.frame(gene = unique(c(fusion.gene$protein1, fusion.gene$protein2)),
+                          fusion = 1)
+
+# save(fusion.gene, file = "/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/gwas_gp_manu_data/fusion.gene.rda")
+```
+
+Generate Cancer Gene Objective Function
+```{r}
+## ## Downloaded from COSMIC. https://cancer.sanger.ac.uk/census. save table as txt file
+cosmic_cancer_consus <- fread(file = "/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/gwas_gp_manu_data/Census_allThu Aug 10 16 27 49 2023.tsv") %>%
+  .[grep(pattern = "breast", x = .$"Tumour Types(Somatic)")] %>% ## Select genes associated with breast cancer
+  dplyr::rename("gene"="Gene Symbol") %>% ## Rename spec. col for easy selection
+  dplyr::select(gene) %>% distinct() %>% ## Select spec column 
+  mutate(source = "cosmic")
+
+# PMID 27161491: 173 most frequently mutated gene (2,433 primary tumours and 650 normal non-cancerous samples)
+pmid_27161491 <- readxl::read_xlsx("/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/gwas_gp_manu_data/41467_2016_BFncomms11479_MOESM809_ESM.xlsx",
+                       skip = 2) %>% 
+  dplyr::rename("gene"="HGNC_symbol") %>%
+  dplyr::select(gene) %>% distinct() %>%
+  mutate(source = "27161491")
+# PMID 31287869 witer method for cancer driver gene identification
+pmid_31287869 <- readxl::read_xlsx("/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/gwas_gp_manu_data/ExcelSupp_gkz566.xlsx") %>%
+  dplyr::rename("gene"="Gene") %>% 
+  dplyr::filter(BRCA != "-") %>%
+  dplyr::select(gene) %>%
+  mutate(source = "31287869")
+
+breast.cancer.gene <- data.frame(gene = unique(c(cosmic_cancer_consus$gene, pmid_27161491$gene, pmid_31287869$gene)),
+                                 cancer.gene = 1)
+
+save(breast.cancer.gene, file = "/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/gwas_gp_manu_data/breast.cancer.gene.rda")
+```
+
+CelltalkDB - Ligand receptor ppi from PMID 33147626
+```{r}
+## Download cvs from review paper https://github.com/LewisLabUCSD/Ligand-Receptor-Pairs PMID 33168968
+celltalkdb <- fread("/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/gwas_gp_manu_data/Human-2022-Dimitrov-LR-pairs.csv")
+
+## Code to harmonize gene names between two different datasets
+check.gene <- checkGeneSymbols(x = unique(c(celltalkdb$source_genesymbol, celltalkdb$target_genesymbol)))
+
+## Code below commented out is to check for genes with no matches in HGNChelper
+# ## Only 182 not approved. Checking those.
+# table(check.gene$Approved)  
+# false.gene <- check.gene %>% dplyr::filter(Approved == FALSE) ## Falses are due to protein complex
+# ## Are these subunit in the celltalkdb as a separate thing?
+# "ERBB2" %in% unique(celltalkdb$target_genesymbol) ## It's there. Lets check something else with grep
+# celltalkdb[grep(pattern = "ERBB2", x = celltalkdb$target_genesymbol),]
+# ## Okay so ERBB2_ERBB4 is a complex and it has a source. So we need to separate the target so we can account for that. 
+
+## Separate complex in source and target column
+celltalkdb <- celltalkdb %>% separate_rows(target_genesymbol, sep = "_") %>% 
+  separate_rows(source_genesymbol, sep = "_") %>% 
+  dplyr::select(source_genesymbol, target_genesymbol) %>%
+  distinct()
+
+## Getting rid of duplicates (reverse pairs)
+celltalkdb <- celltalkdb %>% group_by(grp = paste(pmax(target_genesymbol, source_genesymbol), pmin(target_genesymbol, source_genesymbol), sep = "_")) %>%
+  dplyr::filter(row_number() == 1) %>%
+  ungroup() %>%
+  select(-grp) %>%
+  distinct()
+  
+celltalkdb$inter.ppi <- 1
+save(celltalkdb, file = "/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/gwas_gp_manu_data/celltalkdb.rda")
+```
+
+Protein-protein interaction
+```{r}
+## Load in PPI data from stringdb version 11.5
+str.db.link <- vroom::vroom(file = "/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/gwas_gp_manu_data/9606.protein.links.full.v11.5.txt.gz") %>%
+  as.data.frame() %>%
+  dplyr::filter(experiments != 0 | experiments_transferred != 0) ## Keep ones with experimental evidence (even inferred)
+
+## File to map stringdb id to gene symbol
+str.db.info <- vroom::vroom(file = "/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/gwas_gp_manu_data/9606.protein.info.v11.5.txt.gz") %>%
+  as.data.frame() %>%
+  .[,1:2] %>% 'colnames<-' (c("string_id", "gene_symbol")) %>%
+  distinct()
+
+if(length(unique(str.db.info$string_id)) == nrow(str.db.info)) {
+  message("Good, unique string id")
+} else {
+  message("Beware, there are some duplicated string id")
+}
+
+## There are 3 duplicated genes though. It's okay though.
+str.db.info$gene_symbol[which(duplicated(str.db.info$gene_symbol))]
+
+## check to see if there are any outdated gene name?
+check.gene <- checkGeneSymbols(x = str.db.info$gene_symbol) 
+## Taking a look at false genes
+false.gene <- check.gene %>% dplyr::filter(Approved == FALSE)
+
+## There are false genes without suggested symbol. Lets see if anything of them stand out. Looking manually
+na.gene <- false.gene %>% dplyr::filter(is.na(Suggested.Symbol))
+
+## Manual fixes. The rest are novel genes with ENSG/LOC id
+check.gene[which(check.gene$x == "HGNC:9982"), "Suggested.Symbol"] <- "RFX1"
+check.gene[which(check.gene$x == "HGNC:9979"), "Suggested.Symbol"] <- "RFPL2"
+
+## Apply fixes to genes with suggested symbol
+suggested.gene <- false.gene %>% dplyr::filter(!is.na(Suggested.Symbol))
+## There are some with multiple suggested.symbol. If you grep with "///"
+## Using manually curated txt file (referencing genecards.org) to fix those
+suggested.fix <- vroom::vroom(file = "/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/gwas_gp_manu_data/multigene.suggested.fix.txt")
+
+for(n in suggested.fix$x) {
+  check.gene[which(check.gene$x == n), "Suggested.Symbol"] <- suggested.fix[which(suggested.fix$x == n), "Fixed.Suggested"]
+}
+## Sanity check. good all multiple cases are fixed
+check.gene[grep(pattern = "///", x = check.gene$Suggested.Symbol),] 
+
+## Removing the cases with the multiple gene suggestion "///" so we can apply the other fixes 
+suggested.gene <- suggested.gene[-grep(pattern = "///", x = suggested.gene$Suggested.Symbol),]
+## Apply fix to updated gene name
+for(n in suggested.gene$x) {
+  check.gene[which(check.gene$x == n), "Suggested.Symbol"] <- suggested.gene[which(suggested.gene$x == n), "Suggested.Symbol"]
+}
+
+## Finally, genes without any updates are just updated on Suggested.Symbol
+check.gene[which(is.na(check.gene$Suggested.Symbol)), "Suggested.Symbol"] <- check.gene[which(is.na(check.gene$Suggested.Symbol)), "x"]
+
+str.db.info <- str.db.info %>% left_join(x = ., y = check.gene[,c("x", "Suggested.Symbol")], by = c("gene_symbol"="x")) %>%
+  distinct()
+
+rm(false.gene, na.gene, suggested.gene, suggested.fix); gc()
+
+## Load nearbygene info
+load("/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/gwas_gp_manu_data/breast_nearbygenes_200kb_notelmer_10xgenomic_with_LD.rda")
+nearbygenes <- nearbygenes_10xgenomics %>%
+  dplyr::select(snp, gene_name, gene_type) %>%
+  left_join(x = ., y = str.db.info, by = c("gene_name"="Suggested.Symbol"))
+rm(nearbygenes_10xgenomics)
+
+map.genes <- nearbygenes
+
+## Checking the number of unmap genes by gene_type
+table(is.na(nearbygenes$string_id), nearbygenes$gene_type) 
+## Thats the best we can do for now.
+
+save(str.db.info, str.db.link, map.genes, file = "/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/gwas_gp_manu_data/ppi.map.rda")
+```
+
+
+
+
+
