@@ -37,7 +37,7 @@ str.db.link <- str.db.link %>% dplyr::select(protein1, protein2, experiments,
 
 ## For control data set
 files <- "/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/data/"
-control_group <- paste0("control", c(1:4))
+control_group <- paste0("control", c(1:10))
 run_group <- paste0("run_", c(1:10))
 
 ## For breast cancer data set
@@ -102,7 +102,7 @@ processed.network.res$group <- gsub(pattern = "_.*", replacement = "", x = rowna
 
 ## Ran the code twice above for control and breast so you have to remember to change up the data used. like nearby genes and stuff.
 
-#rm(list = ls(all.names = T)); gc()
+rm(list = ls(all.names = T)); gc()
 load("/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/gwas_gp_manu_data/breast_network_res.rda"); rm(network.res)
 breast <- processed.network.res %>% mutate(type = "BCa")
 load("/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/gwas_gp_manu_data/ctrl_network_res.rda"); rm(network.res)
@@ -112,6 +112,10 @@ combined.data <- rbind(breast, ctrl)
 
 point.color <- c("pink", "grey50")
 names(point.color) <- c("BCa", "Control")
+
+####################################
+## Plotting largest subgraph size ##
+####################################
 
 ## KS test for max subgraph size
 ks.maxsize <- ks.test(breast$max.size, ctrl$max.size)
@@ -125,7 +129,11 @@ p1 <- ggplot(data = combined.data, aes(x = n.clust, y = max.size, color = type))
         panel.grid.major = element_blank(),
         panel.grid.minor = element_blank()) +
   xlab("Total Number of Subgraphs") + ylab("Largest Subgraph Size") +
-  annotate("text", x = 12, y=37, label = paste0("KS = ", signif(ks.maxsize$p.value, digits = 4)), size = 3)
+  annotate("text", x = 12, y=37, label = paste0("KS = ", signif(ks.maxsize$p.value, digits = 4)), size = 3, family = "Arial") ## label hardcoded
+
+###########################
+## Plotting cluster size ##
+###########################
 
 ## KS test for ncluster
 ks.nclust <- ks.test(breast$n.clust, ctrl$n.clust)
@@ -135,12 +143,155 @@ p2 <- ggplot(data = combined.data, aes(x = n.clust, fill = type)) +
   theme_minimal() + xlab("Total Number of Subgraphs") + ylab("Density") +
   scale_fill_manual(values = point.color) +
   guides(fill = "none") +
-  annotate("text", x = 12, y=0.15, label = paste0("KS = ", round(ks.nclust$p.value, digits = 3)), size = 3) +
+  annotate("text", x = 13.5, y=0.20, label = paste0("KS = ", round(ks.nclust$p.value, digits = 3)), size = 3, family = "Arial") + ## label hardcoded
   theme(panel.grid.major = element_blank(),
         panel.grid.minor = element_blank())
 
-```
+###########################################################################
+## Plotting barchart for avg largest subgraph size by breast and control ##
+###########################################################################
 
+## Barchart with subgraph size for breast and control 
+barplot.data <- combined.data %>% dplyr::group_by(type) %>%
+  dplyr::summarise(mean.size = mean(max.size),
+                   sd.size = sd(max.size))
+
+p4 <- ggplot(data = barplot.data) + 
+  geom_bar(aes(x = type, y = mean.size, fill = type), stat="identity", alpha = 0.5) +
+  geom_errorbar(aes(x = type, ymin = mean.size-sd.size, ymax = mean.size + sd.size), width = 0.2, colour="black", alpha=0.9, size=0.2) +
+  theme_minimal() +
+  guides(fill = "none") +
+  scale_fill_manual(values = point.color) +
+  theme(panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank()) +
+  ylab("Largest Subgraph Size") + xlab("")
+
+## Average and sd for largest size in breast and control?
+combined.data %>% dplyr::group_by(type) %>% 
+  dplyr::summarise(avg.max.size = mean(max.size),
+                   sd.max.size = sd(max.size))
+
+###################################################
+## Downsampling BCa samplet to match control set (Downsample to 176). Possibly because more SNPs in Bca == more interaction
+###################################################
+source("/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/code/gp_fun.R")
+
+load("/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/gwas_gp_manu_data/ppi.map.rda"); rm(map.genes) ## PPI data
+str.db.link <- str.db.link %>% dplyr::select(protein1, protein2, experiments, 
+                                             experiments_transferred, combined_score) %>%
+  left_join(x = ., y = str.db.info, by = c("protein1"="string_id")) %>%
+  dplyr::rename("gene1"="gene_symbol") %>%
+  left_join(x = ., y = str.db.info, by = c("protein2"="string_id")) %>%
+  dplyr::rename("gene2"="gene_symbol") %>%
+  .[,c("protein1", "protein2", "gene1", "gene2", "experiments", "experiments_transferred", "combined_score")]
+
+## For breast cancer data set
+files <- "/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/data/" 
+control_group <- paste0("breast")
+run_group <- paste0("run_", c(1:10))
+
+## Generate trace plot for fitness score ##
+###########################################
+network.res <- list()
+set.seed(514)
+for(ctrl in control_group) {
+  for(rg in run_group) {
+    ## load file
+    groupname <- paste0(ctrl,"_",rg)
+    message(paste0("Working on ", groupname))
+    load(paste0(files,"progressive_",ctrl,"_",rg,"_ppithres0_092324.rda"))
+    ## Process data
+    df <- as.data.frame(do.call(rbind, multi.gp["proposal"])) %>%
+      remove_rownames()
+    n.loci <- nrow(df)/1000
+    ## Get # of high confidence calls from the consensus run
+    consensus.gene <- get.consensus.run(data = df, loci = n.loci) %>% pull(gene)
+    
+    ## Random sample 176 locus
+    consensus.gene <- consensus.gene[sample(x = 1:length(consensus.gene), size = 176, replace = FALSE)]
+    
+    ppi <- str.db.link %>% dplyr::filter(gene1 %in% consensus.gene, 
+                                         gene2 %in% consensus.gene) %>% ## Filter for specific genes found in gwas 200kb
+      group_by(grp = paste(pmax(gene1, gene2), pmin(gene1, gene2), sep = "_")) %>%
+      dplyr::filter(row_number() == 1) %>%
+      ungroup() %>%
+      dplyr::select(-grp) %>%
+      distinct()
+    
+    ppi.adj <- ppi %>% mutate(experiments_score = compute_prior_away(score = experiments),
+                              experiments_transferred_score = compute_prior_away(score = experiments_transferred)) %>% 
+      mutate(experiments_both_prior_corrected = 1 - (1 - experiments_score) * (1 - experiments_transferred_score)) %>% 
+	    mutate(final_score = (experiments_both_prior_corrected * (1 - 0.041)) + 0.041) %>%
+	    filter(final_score > 0.4)
+    ## Store data
+    el <- ppi.adj %>% dplyr::select(gene1, gene2) %>% as.matrix()
+    g <- graph_from_edgelist(el, directed = FALSE)
+    g.res <- igraph::components(g)
+    #plot(g)
+    network.res[[groupname]] <- g.res
+  }
+}
+
+## Get avg cluster size, max cluster size and number of cluster
+processed.network.res <- list() ## list to store res
+
+for(n in names(network.res)) {
+  df <- data.frame(avg.size  = mean(network.res[[n]]$csize),
+                   max.size = max(network.res[[n]]$csize),
+                   n.clust = network.res[[n]]$no
+                   )
+  processed.network.res[[n]] <- df
+}
+processed.network.res <- as.data.frame(do.call(rbind, processed.network.res))
+processed.network.res$group <- gsub(pattern = "_.*", replacement = "", x = rownames(processed.network.res))
+
+# save(processed.network.res, network.res, file = "/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/gwas_gp_manu_data/breast_network_res_downsample175.rda")
+
+# rm(list = ls(all.names = T)); gc()
+load("/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/gwas_gp_manu_data/breast_network_res_downsample175.rda"); rm(network.res)
+breast <- processed.network.res %>% mutate(type = "BCa")
+load("/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/gwas_gp_manu_data/ctrl_network_res.rda"); rm(network.res)
+ctrl <- processed.network.res %>% mutate(type = "Control"); rm(processed.network.res)
+
+combined.data <- rbind(breast, ctrl)
+
+## KS test for max subgraph size
+ks.maxsize <- ks.test(breast$max.size, ctrl$max.size)
+
+## KS test for ncluster
+ks.nclust <- ks.test(breast$n.clust, ctrl$n.clust)
+
+## Get mean and sd for breast and control
+combined.data %>% dplyr::group_by(type) %>%
+  dplyr::summarise(mean.maxsize = mean(max.size),
+                   sd.maxsize = sd(max.size))
+
+p1 <- ggplot(data = combined.data, aes(x = n.clust, y = max.size, color = type)) +
+  geom_point(size = 1, alpha = 0.5) +
+  scale_color_manual(values = point.color) +
+  theme_minimal() +
+  theme(legend.title = element_blank(),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank()) +
+  xlab("Total Number of Subgraphs") + ylab("Largest Subgraph Size") +
+  annotate("text", x = 13, y=27, label = paste0("KS = ", signif(ks.maxsize$p.value, digits = 4)), size = 3, family = "Arial") ## label hardcoded
+
+## Barchart with subgraph size for breast and control 
+barplot.data <- combined.data %>% dplyr::group_by(type) %>%
+  dplyr::summarise(mean.size = mean(max.size),
+                   sd.size = sd(max.size))
+
+p4 <- ggplot(data = barplot.data) + 
+  geom_bar(aes(x = type, y = mean.size, fill = type), stat="identity", alpha = 0.5) +
+  geom_errorbar(aes(x = type, ymin = mean.size-sd.size, ymax = mean.size + sd.size), width = 0.2, colour="black", alpha=0.9, size=0.2) +
+  theme_minimal() +
+  guides(fill = "none") +
+  scale_fill_manual(values = point.color) +
+  theme(panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank()) +
+  ylab("Largest Subgraph Size") + xlab("")
+
+```
 
 gini simpson to select consensus of consensus
 ```{r eval=FALSE}
@@ -230,9 +381,34 @@ selected.gene.rsid <- multirun_genes_df %>% dplyr::filter(number_genes <= 2,
 # save(selected.gene.rsid, file = "/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/gwas_gp_manu_data/gini_simpson_selected.gene.rsid.rda")
 ```
 
+Plot Figure 5
+```{r}
+layout <- "
+AAABBBDD
+AAABBBDD
+AAABBBDD
+CCCCCCCC
+CCCCCCCC
+CCCCCCCC
+CCCCCCCC
+CCCCCCCC
+"
 
+dev.off()
+combined.plot <- p2 + p1 + plot_spacer() + p4 + plot_layout(design = layout) + plot_annotation(tag_levels = "A") &
+  theme(legend.position = 'bottom',
+        plot.tag = element_text(face = 'bold', size = 10),
+        axis.text = element_text(size = 8),
+        axis.title = element_text(size = 8),
+        legend.text = element_text(size = 6),
+        legend.title = element_blank(), 
+        text = element_text(family = "Arial")) 
 
+ggsave("/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/figures/figure_5.png", width = 170, height = 170,
+       units = "mm", dpi = 300)
+```
 
+Code to generate and plot figure 6
 ```{r}
 ######################################
 ## What are the PPI found in breast ##
@@ -397,31 +573,43 @@ legend.anno <- ditto_colours[c(3,4,6,7,8,9,10,1)]
 #                       "LUM_HR-pos", "Lymph_EC", "Lymphoid", "Myeloid")
 
 # Make the plot
+dev.off()
+reso <- 600
+length <- 480*reso/72
+png("/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/figures/figure6.png",
+    res = reso,
+    height = length,
+    width = length)
+par(mar=c(4,0,0,0))
+par(oma=c(3,3,3,3))
+par(family = "Arial")
 set.seed(514)
 plot(network, 
-     vertex.color = cell.anno,
+     vertex.color = adjustcolor(col = cell.anno, alpha.f = 0.75),
+     vertex.frame.color = adjustcolor(col = cell.anno, alpha.f = 0.75),
      vertex.label.color = "black",
      vertex.label.font = 2,
+     vertex.label.family = "Arial",
      vertex.label.cex = 1.5,
      vertex.size = 20,
      edge.width = 4)
-text(c(0.9, -0.4, -1.2, 1.0, 0.15, -0.55), c(0.6, -1.1, 0.6, -0.75, -0.35, -0.30), c("1", "2", "3", "4", "5", "6"), cex = 2, family = 2)
-legend("bottomleft", legend=levels(as.factor(V(network)$value))[1], col = legend.anno[1], bty = "n", pch = 20, pt.cex = 3, cex = 1, 
-       text.col= "black", horiz = TRUE, inset = c(0,0))
-legend("bottomleft", legend=levels(as.factor(V(network)$value))[2], col = legend.anno[2], bty = "n", pch = 20, pt.cex = 3, cex = 1, 
-       text.col= "black", horiz = TRUE, inset = c(0,0.05))
-legend("bottomleft", legend=levels(as.factor(V(network)$value))[3], col = legend.anno[3], bty = "n", pch = 20, pt.cex = 3, cex = 1, 
-       text.col= "black", horiz = TRUE, inset = c(0,0.1))
-legend("bottomleft", legend=levels(as.factor(V(network)$value))[4], col = legend.anno[4], bty = "n", pch = 20, pt.cex = 3, cex = 1, 
-       text.col= "black", horiz = TRUE, inset = c(0,0.15))
-legend("bottomleft", legend=levels(as.factor(V(network)$value))[5], col = legend.anno[5], bty = "n", pch = 20, pt.cex = 3, cex = 1, 
-       text.col= "black", horiz = TRUE, inset = c(0,0.20))
-legend("bottomleft", legend=levels(as.factor(V(network)$value))[6], col = legend.anno[6], bty = "n", pch = 20, pt.cex = 3, cex = 1, 
-       text.col= "black", horiz = TRUE, inset = c(0,0.25))
-legend("bottomleft", legend=levels(as.factor(V(network)$value))[7], col = legend.anno[7], bty = "n", pch = 20, pt.cex = 3, cex = 1, 
-       text.col= "black", horiz = TRUE, inset = c(0,0.3))
+text(c(0.9, -0.4, -1.2, 1.0, 0.15, -0.55), c(0.6, -1.1, 0.6, -0.75, -0.35, -0.30), c("1", "2", "3", "4", "5", "6"), cex = 2, family = "Arial", col = "red")
+legend("bottomleft", legend=levels(as.factor(V(network)$value))[1], col = legend.anno[1], bty = "n", pch = 20, pt.cex = 3, cex = 1.4, 
+       text.col= "black", horiz = TRUE, inset = c(0.69,-0.155), xpd = TRUE)
+legend("bottomleft", legend=levels(as.factor(V(network)$value))[2], col = legend.anno[2], bty = "n", pch = 20, pt.cex = 3, cex = 1.4, 
+       text.col= "black", horiz = TRUE, inset = c(0.69,-0.105), xpd = TRUE)
+legend("bottomleft", legend=levels(as.factor(V(network)$value))[3], col = legend.anno[3], bty = "n", pch = 20, pt.cex = 3, cex = 1.4, 
+       text.col= "black", horiz = TRUE, inset = c(0.34,-0.155), xpd = TRUE)
+legend("bottomleft", legend=levels(as.factor(V(network)$value))[4], col = legend.anno[4], bty = "n", pch = 20, pt.cex = 3, cex = 1.4, 
+       text.col= "black", horiz = TRUE, inset = c(0.34,-0.205), xpd = TRUE)
+legend("bottomleft", legend=levels(as.factor(V(network)$value))[5], col = legend.anno[5], bty = "n", pch = 20, pt.cex = 3, cex = 1.4, 
+       text.col= "black", horiz = TRUE, inset = c(0.02,-0.105), xpd = TRUE)
+legend("bottomleft", legend=levels(as.factor(V(network)$value))[6], col = legend.anno[6], bty = "n", pch = 20, pt.cex = 3, cex = 1.4, 
+       text.col= "black", horiz = TRUE, inset = c(0.02,-0.155), xpd = TRUE)
+legend("bottomleft", legend=levels(as.factor(V(network)$value))[7], col = legend.anno[7], bty = "n", pch = 20, pt.cex = 3, cex = 1.4, 
+       text.col= "black", horiz = TRUE, inset = c(0.34,-0.105), xpd = TRUE)
 
-
+dev.off()
 
 # gene.membership <- as.data.frame(g.res$membership) %>%
 #   'colnames<-' (c("membership")) %>%
@@ -442,7 +630,7 @@ legend("bottomleft", legend=levels(as.factor(V(network)$value))[7], col = legend
 #   xlab("Subgraph") + ylab("Frequency") + labs(fill = "") +
 #   scale_fill_manual(values = cell.anno2)
 
-ig <- image_read("/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/figures/consensus_interaction_network.png")
+ig <- image_read("/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/figures/test.png")
 p3 <- image_ggplot(ig) 
 
 ## Remove labels generated from image_ggplot
@@ -450,68 +638,6 @@ p3$labels$x <- ""
 p3$labels$y <- ""
 p3$data$x <- ""
 p3$data$y <- ""
-
-```
-
-
-```{r}
-layout <- "
-AAABBBDD
-AAABBBDD
-AAABBBDD
-EEEEEEEE
-EEEEEEEE
-EEEEEEEE
-FFFFFFCC
-FFFFFFCC
-"
-
-layout <- "
-AAABBBDD
-AAABBBDD
-AAABBBDD
-CCCCCCCC
-CCCCCCCC
-CCCCCCCC
-CCCCCCCC
-CCCCCCCC
-"
-
-dev.off()
-combined.plot <- p2 + p1 + plot_spacer() + p4 + plot_spacer() + plot_layout(design = layout) + plot_annotation(tag_levels = "A") &
-  theme(legend.position = 'bottom',
-        plot.tag = element_text(face = 'bold', size = 10),
-        axis.text = element_text(size = 8),
-        axis.title = element_text(size = 8),
-        legend.text = element_text(size = 6),
-        legend.title = element_blank()) 
-
-ggsave("/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/figure/figure_6.png", width = 170, height = 170,
-       units = "mm", dpi = 300)
-
-
-layout <- "
-AAAAAAAA
-AAAAAAAA
-AAAAAAAA
-AAAAAAAA
-AAAAAAAA
-AAAAAAAA
-AAAAAAAA
-BBBBBBBB
-"
-
-dev.off()
-combined.plot <- p3 + plot_spacer() + plot_layout(design = layout) &
-  theme(legend.position = 'bottom',
-        plot.tag = element_text(face = 'bold', size = 10),
-        axis.text = element_text(size = 8),
-        axis.title = element_text(size = 8),
-        legend.text = element_text(size = 6),
-        legend.title = element_blank()) 
-
-ggsave("/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/figures/figure_6.png", width = 170, height = 170,
-       units = "mm", dpi = 300)
 
 ```
 

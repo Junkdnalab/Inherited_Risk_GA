@@ -51,7 +51,7 @@ p1 <- ggplot(data = individual.fitness.gen, aes(x = gen, y = fitness)) +
   geom_vline(xintercept = 123, linetype = "dashed", colour = "red") +
   theme(panel.grid = element_blank(),
         axis.line = element_line(colour = "black")) +
-  annotate(geom = "text", x = 123-50, y = 0.43, label = paste0("Gen=123"), color = "red", size = 3)
+  annotate(geom = "text", x = 123-50, y = 0.43, label = paste0("Gen=123"), color = "red", size = 3, family = "Arial")
 ```
 
 Generate % change over 5 generations
@@ -118,9 +118,14 @@ of.plotdata <- of.mean %>% dplyr::select(-fitness, -type, -omic) %>%
 p4 <- ggplot(data = of.plotdata, aes(x = gen, y = score, group = of)) +
   geom_line() + theme_minimal() +
   xlab("Generation") + ylab("OF Score") +
-  geom_label(aes(label = new.of), data = of.plotdata %>% filter(gen == 55), nudge_x = 0.35, size = 2) +
+  geom_label(aes(label = new.of), data = of.plotdata %>% filter(gen == 55, !new.of %in% c("Promoter", "Cancer Gene", "LPI", "Marker Gene")), nudge_x = 0.35, size = 2) +
+  geom_label(aes(label = new.of), data = of.plotdata %>% filter(gen == 55, new.of %in% c("Promoter")), nudge_x = 0.35, nudge_y = 0.02, size = 2) +
+  geom_label(aes(label = new.of), data = of.plotdata %>% filter(gen == 55, new.of %in% c("Cancer Gene")), nudge_x = 0.35, nudge_y = -0.01, size = 2) +
+  geom_label(aes(label = new.of), data = of.plotdata %>% filter(gen == 55, new.of %in% c("LPI")), nudge_x = 0.35, nudge_y = -0.02, size = 2) +
+  geom_label(aes(label = new.of), data = of.plotdata %>% filter(gen == 55, new.of %in% c("Marker Gene")), nudge_x = 0.35, nudge_y = 0.02, size = 2) +
   theme(panel.grid = element_blank(),
         axis.line = element_line(colour = "black"))
+
 ```
 
 Initial and final generation gene and cell type
@@ -176,7 +181,7 @@ p5 <- ggplot(data = combined.g, aes(fill = Var1, y = Freq, x = type)) +
   theme(panel.grid = element_blank()) +
   geom_text(aes(label = labels), color = "black", size = 2.2, 
             position = position_stack(vjust = 0.5), 
-            show.legend = FALSE)
+            family = "Arial", show.legend = FALSE)
 
 p6 <- ggplot(data = combined.ct, aes(fill = Var1, y = Freq, x = type)) +
   geom_bar(position = 'stack', stat = 'identity') +
@@ -186,7 +191,7 @@ p6 <- ggplot(data = combined.ct, aes(fill = Var1, y = Freq, x = type)) +
   theme(panel.grid = element_blank()) +
   geom_text(aes(label = labels), color = "black", size = 2.2, 
             position = position_stack(vjust = 0.5), 
-            show.legend = FALSE)
+            family = "Arial", show.legend = FALSE)
 ```
 
 Get frequency of top gene and cell type called 
@@ -225,10 +230,10 @@ l2g.res <- data.frame(chrom = l2g.top$chrom,
                       start = l2g.top$pos,
                       end = l2g.top$pos)
 
-## Get snp list from biomart
-ensembl_snp <- useEnsembl(biomart = "snps",
-                          dataset = "hsapiens_snp",
-                          version = "112") 
+## Get snp list from biomart --> Commented out because takes a while to run. Object will be loaded below
+# ensembl_snp <- useEnsembl(biomart = "snps",
+#                           dataset = "hsapiens_snp",
+#                           version = "112") 
 # Check version from the website. check bottom left corner https://useast.ensembl.org/index.html
 
 ## Load breast data
@@ -300,17 +305,17 @@ p7 <- combined.plotdata %>% dplyr::filter(type == "gene",
   geom_beeswarm(corral = "random", size = 0.25) +
   geom_beeswarm(data = subset(combined.plotdata, L2G == '1'),
              aes(x = gen, y = calls, color = as.character(L2G)), size = 0.25, corral = "random") +
-  theme_minimal() + xlab("") + ylab("Fraction of proposal in top genes") + guides(color = FALSE) +
+  theme_minimal() + xlab("") + ylab("Frequency of top gene") + guides(color = FALSE) +
   scale_color_manual(values = l2g.anno) +
   theme(panel.grid = element_blank()) +
   geom_hline(yintercept = l2g.thres, linetype = "dashed", color = "red") + ## Add l2g threshold line
-  annotate(geom = "text", x = "Gen0", y = l2g.thres - 30, label = paste0("n=", l2g.thres), color = "red", size = 3) ## Add text for l2gthres
+  annotate(geom = "text", x = "Gen0", y = l2g.thres - 30, label = paste0("n=", l2g.thres), color = "red", size = 3, family = "Arial") ## Add text for l2gthres
 
 ## Plot proposal frequency for top cell types called
 p8 <- combined.plotdata %>% dplyr::filter(type == "celltype") %>%
   ggplot(data = ., aes(x = gen, y = calls)) +
   geom_beeswarm(corral = "random", size = 0.25) +
-  theme_minimal() + xlab("") + ylab("Fraction of proposal in top cell type") +
+  theme_minimal() + xlab("") + ylab("Frequency of top cell type") +
   theme(panel.grid = element_blank())
 
 ## What is the confidence call using the l2g.thres from p7?
@@ -323,9 +328,9 @@ Plot Figure 2
 layout <- "
 AAACCCCC
 AAACCCCC
-AAACCCCC
-AAACCCCC
 BBBCCCCC
+DDDDDDDD
+DDDDDDDD
 DDDDDDDD
 DDDDDDDD
 DDDDDDDD"
@@ -337,7 +342,8 @@ combined_plot1 <- p1 + p2 + p4 + plot_spacer() + plot_layout(design=layout, guid
         axis.text.x = element_text(size = 8),
         axis.text.y = element_text(size = 8),
         axis.title = element_text(size = 8),
-        legend.text = element_text(size = 8)) 
+        legend.text = element_text(size = 8),
+        text = element_text(family = "Arial")) 
 # combined_plot
 ggsave("/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/figures//figure_2.png", width = 170, height = 170,
        units = "mm", dpi = 300)
@@ -362,7 +368,8 @@ combined_plot1 <- p7 + p8 + p5 + p6 + plot_spacer() + plot_layout(design=layout,
         axis.text.x = element_text(size = 8),
         axis.text.y = element_text(size = 8),
         axis.title = element_text(size = 8),
-        legend.text = element_text(size = 8)) 
+        legend.text = element_text(size = 8),
+        text = element_text(family = "Arial")) 
 # combined_plot
 ggsave("/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/figures/figure_3.png", width = 170, height = 170,
        units = "mm", dpi = 300)

@@ -26,7 +26,7 @@ p1 <- ggplot(sankey.data,
            axis1 = primary, axis2 = axis2, axis3 = axis3)) +
   geom_alluvium(aes(fill = as.character(value))) + ## Annotate the OF number
   geom_stratum(alpha = 0.5, width = c(rep(0.325,times=6), rep(.45,times=11), rep(0.325,times=2))) + ## Custom width size
-  geom_text(stat = "stratum", aes(label = after_stat(stratum)), size = 3) +
+  geom_text(stat = "stratum", aes(label = after_stat(stratum)), size = 3, family = "Arial") +
   ylab("") +
   theme_minimal() +
   scale_fill_manual(values = kelly.colours[2:22]) +
@@ -35,6 +35,7 @@ p1 <- ggplot(sankey.data,
         axis.text.y = element_blank(),
         axis.text.x = element_text(size = 8),
         axis.title = element_blank(),
+        text = element_text(family = "Arial"),
         legend.position = "none")
 p1
 
@@ -57,7 +58,8 @@ combined.plot <- p1 + plot_spacer() + plot_layout(design = layout) &
         axis.text = element_text(size = 8),
         axis.title = element_text(size = 8),
         legend.text = element_text(size = 8),
-        legend.title = element_text(size = 8)) 
+        legend.title = element_text(size = 8),
+        text = element_text(family = "Arial")) 
 ggsave("/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/figures/figure_1.png", width = 170, height = 170,
-       units = "mm", dpi = 300)
+       units = "mm", dpi = 600)
 ```

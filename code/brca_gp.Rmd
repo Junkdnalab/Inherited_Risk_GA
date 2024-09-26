@@ -23,7 +23,7 @@ suppressMessages(c(
 ))
 ```
 
-Get nearby genes for each credible snp
+Identification of candidate genes (nearby gene set)
 ```{r}
 ## Load RNA-seq data
 rna <- readRDS("/drive-pool/data/peter_data/sc_data/brca/GSE168836/GSE168836_Sobj_Final_Scaled_MetaUpdt_V2.rds")
@@ -31,6 +31,7 @@ rna <- readRDS("/drive-pool/data/peter_data/sc_data/brca/GSE168836/GSE168836_Sob
 sct_rna <- SCTransform(rna, vst.flavor = "v2", verbose = TRUE,
                        return.only.var.genes = TRUE)
 #save(sct_rna, file = "/drive-pool/data/peter_data/genetic_programming/code/brca/sct_rna.rda")
+
 ################################
 ## Find Nearby Genes from SNP ##
 ## Create df object using processed gtf.v38.mapped.gene
@@ -53,8 +54,10 @@ for(n in dup.genes) {
   gtf.df <- gtf.df[-dup.rm,] ## Remove it from gtf.df
 }; rm(dup, dup.rm); gc()
 
-table(duplicated(gtf.df$gene_name)) ## No more dups
+## Checking for dups with table option --> No more dups
+table(duplicated(gtf.df$gene_name)) 
 
+## Create gene annotation dataframe
 geneAnnot.df <- gtf.df %>% dplyr::select(seqnames,
                                          start,
                                          end,
@@ -62,30 +65,21 @@ geneAnnot.df <- gtf.df %>% dplyr::select(seqnames,
                                          gene_name,
                                          gene_type)
 
-geneWidth <- gtf.df %>% dplyr::select(gene_name, gene_type, width)
-save(geneWidth, file = "/drive-pool/data/peter_data/genetic_programming/code/brca/geneWidth.rda")
-
-# load("~/gwas/PCa/calc.zscore.all.genes.rda"); rm(calc.avg, calc.tpm, calc.zscore); gc()
-# geneAnnot.df <- gtf.v38.mapped.gene %>% dplyr::select(seqnames,
-#                                                       start,
-#                                                       end,
-#                                                       strand,
-#                                                       x)
 ## Get transcription start site based on strand info
 geneAnnot.df$tss <- NA
 geneAnnot.df[which(geneAnnot.df$strand == "+"), "tss"] <- geneAnnot.df[which(geneAnnot.df$strand == "+"), "start"]
 geneAnnot.df[which(geneAnnot.df$strand == "-"), "tss"] <- geneAnnot.df[which(geneAnnot.df$strand == "-"), "end"]
 geneAnnot.df$seqnames <- as.character(geneAnnot.df$seqnames)
 
-#save(geneAnnot.df, file = "/drive-pool/data/peter_data/genetic_programming/code/brca/geneAnnot.df.rda")
+# save(geneAnnot.df, file = "/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/gwas_gp_manu_data/geneAnnot.df.rda")
 
 ## Prep data for finding nearest genes
-load("/drive-pool/data/peter_data/genetic_programming/code/brca/geneAnnot.df.rda") ## gene annotation
-load("/drive-pool/data/peter_data/genetic_programming/code/brca/gwas_finemap.rda") ## Finemap snp
-load("/drive-pool/data/peter_data/genetic_programming/code/brca/snpinLD.rda") ## Snps in LD with finemap snp
+load("/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/gwas_gp_manu_data/geneAnnot.df.rda") ## gene annotation
+load("/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/gwas_gp_manu_data/gwas_snps.rda") ## GWAS snp
+load("/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/gwas_gp_manu_data/snpinLD.rda") ## Snps in LD with GWAS snp
 
-## Simply df to only include relevant column. Also, add column to say what SNPs have LD
-snps.df <- gwas_finemap %>% dplyr::select(CHR_ID, CHR_POS, SNP_ID_CURRENT) %>%
+## Simplify df to only include relevant column. Also, add column to say what SNPs have LD
+snps.df <- gwas_snps %>% dplyr::select(CHR_ID, CHR_POS, SNP_ID_CURRENT) %>%
   dplyr::rename("seqnames"="CHR_ID", "start"="CHR_POS", "SNP_id"="SNP_ID_CURRENT") %>% ## Rename columns
   mutate(seqnames = paste0("chr", seqnames)) %>% ## add chr before chromosome id
   distinct() %>% ## Keep unique observations
@@ -102,8 +96,10 @@ ldsnps.range <- ld %>% dplyr::group_by(LEAD_SNP) %>%
   dplyr::summarise(min = min(CHR_POS),
                    max = max(CHR_POS))
 
+## gene TSS dataframe
 gene.tss <- geneAnnot.df %>% dplyr::select(seqnames, tss, gene_name, gene_type)
 
+## Generate a list of chrid, pos, rsid, and ld status for the mclapply "nearbygene"
 gwas.list <- as.list(as.data.frame(t(snps.df[, c("seqnames", "start", "SNP_id", "LD")])))
 
 distance_thres <- 2e5 ## Distance threshold is 200kb from snp left and right
@@ -115,7 +111,7 @@ min.genes <- 10 ## Set the min ngenes a lead snp should have. only needed when e
 nearbygenes <- mclapply(X = gwas.list, FUN = function(x) {
   
   gA.filter <- gene.tss %>% dplyr::filter(seqnames == x[1])
-  ## Need to add code for after
+  
   if(x[4] == "0") { ## If there is no SNP in LD. Use the CHR_POS
     ## No SNP, get all genes within distance threshold left and right of snp (400kb window)
     ## If less than 10 genes, keep expanding until you get 10 genes total (5 left and 5 right)
@@ -269,33 +265,25 @@ mc.cores = 20
 nearbygenes_10xgenomics <- as.data.frame(do.call(rbind, nearbygenes))
 ## Sometimes there are no more genes at the tail end of the chromosome. Those will come back as NA. Remove NAs
 nearbygenes_10xgenomics <- na.omit(nearbygenes_10xgenomics)
-save(nearbygenes_10xgenomics, file = "/drive-pool/data/peter_data/genetic_programming/breast_nearbygenes_200kb_notelmer_10xgenomic_with_LD.rda")
-
-as.data.frame(table(nearbygenes_10xgenomics$snp)) %>%
-  ggplot(data = ., aes(x = Freq)) +
-  geom_density() +
-  theme_minimal() +
-  xlab("Total ngenes") + ylab("Density") +
-  ggtitle(paste0("Number of Genes per SNP - ", length(unique(nearbygenes_10xgenomics$snp)), " SNPs"))
-
-df <- as.data.frame(table(nearbygenes_10xgenomics$snp))
-
-
+save(nearbygenes_10xgenomics, file = "/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/gwas_gp_manu_data/breast_nearbygenes_200kb_notelmer_10xgenomic_with_LD.rda")
 ```
 
-Generate findmarker data for breast data
+Generate Marker Gene OF
 ```{r}
-load("/drive-pool/data/peter_data/genetic_programming/code/brca/sct_rna.rda") ## Load sctransform data
-#sct_rna@active.ident <- sct_rna@meta.data$CellType
-#sct_rna$ID_coarse <- as.character(sct_rna@meta.data$CellType)
+load("/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/gwas_gp_manu_data/sct_rna.rda") ## Load sctransform data
+
+## Filter for CF data ##
 sct_rna$SampleType = ifelse(grepl("CF", sct_rna@meta.data$orig.ident), "CF", "TM")
 Idents(sct_rna) <- sct_rna@meta.data[["CellType"]]
-sct_rna <- subset(x = sct_rna, subset = SampleType == "CF") ## Filter data for only CF data
+sct_rna <- subset(x = sct_rna, subset = SampleType == "CF") 
 
+## Get unique cell type annotation
 celltype <- unique(as.character(sct_rna@meta.data[["CellType"]]))
 
+## Marker list to store result
 marker.list <- list()
 
+## Using seurat findmarkers to do cell to cell comparison
 for(n in celltype) {
   for(p in celltype) {
     if(n == p) { ## If comparison is same cell type, next
@@ -314,64 +302,26 @@ for(n in celltype) {
 }
 
 marker.list <- as.data.frame(do.call(rbind, marker.list))
-save(marker.list, sct_rna, file = "/drive-pool/data/peter_data/genetic_programming/code/brca/breast_sct_marker.list_pairwise.rda")
+# save(marker.list, sct_rna, file = "/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/gwas_gp_manu_data/breast_sct_marker.list_pairwise.rda")
 rm(list = ls(all.names = T)); gc()
-load("/drive-pool/data/peter_data/genetic_programming/code/brca/breast_sct_marker.list_pairwise.rda"); rm(sct_rna)
-table(marker.list$p_val_adj < 0.05)
-ggplot(data = marker.list, aes(x = p_val_adj)) +
-  geom_density() +
-  theme_minimal() +
-  xlab("Adjusted P-Value") + ylab("Density") +
-  ggtitle("Distribution of Adj. P-Value for FindMarkers")
-#ggsave("/drive-pool/data/peter_data/genetic_programming/figure/distrib_pval_findmarkers.png", width = 10, height = 7)
-## Based on the plot above, we need to filter the adj pvalue for significance (<= 0.05)
+load("/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/gwas_gp_manu_data/breast_sct_marker.list_pairwise.rda"); rm(sct_rna)
+
+## Filter the adj pvalue for significance (<= 0.05) and log2fc 0.25
 marker.filtered <- marker.list %>% remove_rownames() %>% dplyr::filter(p_val_adj <= 0.05) %>% 
   dplyr::filter(avg_log2FC >= 0.25)
 
-marker.heatmap <- marker.filtered %>% dplyr::select(gene, celltype1, celltype2) %>%
-  mutate(hit = 1) %>%
-  spread(data = ., key = celltype2, value = hit)
-## Lets see how similar are the marker genes for each cell type
-celltype <- unique(marker.filtered$celltype1)
-
-ct.jaccard <- data.frame(matrix(data = NA, nrow = length(celltype), ncol = length(celltype))) %>%
-  'colnames<-' (celltype) %>%
-  'rownames<-' (celltype)
-
-for(n in celltype) {
-  ## Get cell type marker genes
-    a <- marker.filtered %>% dplyr::filter(celltype1 == n) %>% 
-    pull(gene) %>% unique()
-  for(p in celltype) {
-    b <- marker.filtered %>% dplyr::filter(celltype1 == p) %>% 
-    pull(gene) %>% unique()
-    ct.jaccard[n,p] <- jaccard(a = a, b = b)
-  }
-}
-
-pheatmap(ct.jaccard)
-
+## Filter df for relevant column
 marker.hits <- marker.filtered %>% dplyr::select(gene, celltype1) %>% 
   dplyr::rename("celltype"="celltype1") %>%
   distinct() 
 
-## Calculate the n celltype for each marker
-marker.plot <- as.data.frame(table(marker.hits$gene))
+# save(marker.hits, file = "/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/gwas_gp_manu_data/breast_marker.list.rda")
 
-ggplot(data = marker.plot, aes(x = Freq)) +
-  geom_density() +
-  theme_minimal() +
-  xlab("Number of Celltypes") + ylab("Density") +
-  ggtitle("Distribution of Number of Cell Type for Each Marker Gene - FindMarkers") +
-  scale_x_continuous(breaks = seq(0, 12, by = 1))
-
-#save(marker.hits, file = "/drive-pool/data/peter_data/genetic_programming/code/brca/breast_marker.list.rda")
-
-###########################################################################################
-## This is extra code to try to find marker relative to all other celltypes (background) ##
+##############################################################
+## Find marker relative to all other celltypes (background) ##
 marker.list <- list()
 
-for(n in celltype) {
+for(n in celltype) { ## Same as cell to cell comparison
   message(paste0("Working on celltype ", n))
   marker <- FindMarkers(sct_rna, assay = "SCT", ident.1 = n, ident.2 = NULL, test.use = "wilcox",
                         only.pos = TRUE)
@@ -380,9 +330,10 @@ for(n in celltype) {
   marker.list[[n]] <- marker
 }
 
+## Seurat finder result
 marker.list <- as.data.frame(do.call(rbind, marker.list))
-save(marker.list, file = "/drive-pool/data/peter_data/genetic_programming/code/brca/marker.list.bg.rda")
 
+## Filtered based on padj <= 0.05 and log2fc >= 0.025
 marker.filtered <- marker.list %>% remove_rownames() %>% 
   dplyr::filter(p_val_adj <= 0.05,
                 avg_log2FC >= 0.25)
@@ -390,26 +341,31 @@ marker.filtered <- marker.list %>% remove_rownames() %>%
 marker.hits <- marker.filtered %>% dplyr::select(gene, celltype) %>%
   distinct() 
 
-save(marker.list, marker.hits, file = "/drive-pool/data/peter_data/genetic_programming/code/brca/marker.list.bg.rda")
-
+save(marker.list, marker.hits, file = "/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/gwas_gp_manu_data/marker.list.bg.rda")
 ```
 
-Promoter data
+Generate Promoter OF
 ```{r}
-load("/drive-pool/data/peter_data/genetic_programming/breast_nearbygenes_200kb_notelmer_10xgenomic_with_LD.rda")
+## Load data
+## Nearby genes list
+load("/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/gwas_gp_manu_data/breast_nearbygenes_200kb_notelmer_10xgenomic_with_LD.rda")
 nearbygenes <- nearbygenes_10xgenomics; rm(nearbygenes_10xgenomics)
-load("/drive-pool/data/peter_data/genetic_programming/code/brca/gwas_finemap.rda")
-load("/drive-pool/data/peter_data/genetic_programming/code/brca/snpinLD.rda")
+## GWAS SNPs
+load("/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/gwas_gp_manu_data/gwas_snps.rda")
+## SNPs in LD with GWAS SNPs
+load("/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/gwas_gp_manu_data/snpinLD.rda")
+
 ## Get atac-seq probes and make into granges
 genes.granges <- GRanges(seqnames = Rle(nearbygenes$seqnames),
                        range = IRanges(start = nearbygenes$tss),
                        gene = nearbygenes$gene_name)
 genes.granges <- unique(genes.granges)
 
+## Get promoter granges (1kb up 100bp down)
 promoter.granges <- promoters(genes.granges, upstream = 1000, downstream = 100)
-## Make gwas snps into granges
 
-all.snps <- gwas_finemap[,c("CHR_ID", "CHR_POS", "SNP_ID_CURRENT")] %>%
+## Make gwas snps into granges
+all.snps <- gwas_snps[,c("CHR_ID", "CHR_POS", "SNP_ID_CURRENT")] %>%
   dplyr::rename("SNPS"="SNP_ID_CURRENT") %>%
   rbind(.,
         ld[,c("CHR_ID", "CHR_POS", "SNPS")]) %>%
@@ -420,9 +376,11 @@ gwas <- GRanges(seqnames = Rle(paste0("chr", all.snps$CHR_ID)),
                                 end = as.numeric(all.snps$CHR_POS) + 499),
                 locus = all.snps$SNPS,
                 chr_pos = as.numeric(all.snps$CHR_POS))
+
 ## Find overlaps between snp and promoter region
 hits <- findOverlaps(query = gwas, subject = promoter.granges)
 
+## Create promoter df based on hits object
 promoter.df <- cbind(as.data.frame(gwas) %>% .[hits@from,],
                        as.data.frame(promoter.granges) %>% .[hits@to,]) %>%
   remove_rownames() %>%
@@ -435,94 +393,31 @@ promoter.df <- cbind(as.data.frame(gwas) %>% .[hits@from,],
 ## Anything that is NA in LEAD_SNP is column the locus is the lead snp
 promoter.df[which(is.na(promoter.df$LEAD_SNP)), "LEAD_SNP"] <- promoter.df[which(is.na(promoter.df$LEAD_SNP)), "locus"] 
 
-save(promoter.df, file = "/drive-pool/data/peter_data/genetic_programming/code/brca/ld_promoter.df.rda")
+# save(promoter.df, file = "/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/gwas_gp_manu_data/ld_promoter.df.rda")
 ```
 
 Fusion Gene Objective Function
 ```{r}
 rm(list = ls(all.names = T)); gc()
 
-fusion.gene <- fread("/drive-pool/data/peter_data/genetic_programming/code/brca/breast_cosmic_fusion.txt")
+## Downloaded from COSMIC. https://cancer.sanger.ac.uk/cosmic/fusion. save table as txt file
+fusion.gene <- fread("/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/gwas_gp_manu_data/breast_cosmic_fusion.txt")
 
-## Process the data to split genepair column into two separate genes
+## Process the data to split gene pair column into two separate genes
 fusion.gene <- fusion.gene %>% dplyr::select(genepair) %>%
   separate(genepair, sep = " / ", c("protein1", "protein2")) %>%
   mutate(protein1 = gsub(pattern = "_.*", replacement = "", x = protein1),
          protein2 = gsub(pattern = "_.*", replacement = "", x = protein2)) %>% 
   distinct()
 
+## Keep unique
 fusion.gene <- data.frame(gene = unique(c(fusion.gene$protein1, fusion.gene$protein2)),
                           fusion = 1)
 
-load("/drive-pool/data/peter_data/genetic_programming/breast_nearbygenes_200kb_elmer_10xgenomic.rda")
-nearbygenes <- nearbygenes_10xgenomics; rm(nearbygenes_10xgenomics)
-
-table(fusion.gene$gene %in% unique(nearbygenes$gene_name)) ## Only 5 match. Maybe it's not found in the nearbygenes. Maybe it's in the full gtf file.
-
-## Checking that
-load("/drive-pool/data/peter_data/genetic_programming/code/brca/geneAnnot.df.rda")
-
-table(fusion.gene$gene %in% geneAnnot.df$gene_name) ## Yep. 74 out of 75 is present. So it seems like we only have 5 matches for the fusion gene.
-
-save(fusion.gene, file = "/drive-pool/data/peter_data/genetic_programming/code/brca/fusion.gene.rda")
+# save(fusion.gene, file = "/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/gwas_gp_manu_data/fusion.gene.rda")
 ```
 
-SNP in coding region
-```{r}
-rm(list = ls(all.names = T)); gc()
-
-## Load gtf file
-gtf <- import("/drive-pool/data/peter_data/genetic_programming/shared_data/refdata-gex-GRCh38-2020-A/genes/genes.gtf")
-
-gtf.df <- gtf %>% as.data.frame() %>% 
-  dplyr::filter(type %in% c("exon"),
-                gene_type %in% c("protein_coding", "lncRNA")); rm(gtf)
-
-## Load snp file
-load("/drive-pool/data/peter_data/genetic_programming/code/brca/gwas_finemap.rda")
-load("/drive-pool/data/peter_data/genetic_programming/code/brca/snpinLD.rda")
-
-## Convert both snp and gtf to granges object
-
-all.snps <- gwas_finemap[,c("CHR_ID", "CHR_POS", "SNP_ID_CURRENT")] %>%
-  dplyr::rename("SNPS"="SNP_ID_CURRENT") %>%
-  rbind(.,
-        ld[,c("CHR_ID", "CHR_POS", "SNPS")]) %>%
-  distinct()
-
-gwas <- GRanges(seqnames = Rle(paste0("chr", all.snps$CHR_ID)),
-                range = IRanges(start = as.numeric(all.snps$CHR_POS) - 500,
-                                end = as.numeric(all.snps$CHR_POS) + 499),
-                locus = all.snps$SNPS,
-                chr_pos = as.numeric(all.snps$CHR_POS))
-
-gtf <- GRanges(seqnames = Rle(gtf.df$seqnames),
-                       range = IRanges(start = gtf.df$start,
-                                       end = gtf.df$end),
-                       strand = Rle(gtf.df$strand),
-                       gene = gtf.df$gene_name,
-               exon = gtf.df$exon_number)
-
-## Find overlaps between snp and promoter region
-hits <- findOverlaps(query = gwas, subject = gtf)
-
-coding.hits <- cbind(as.data.frame(gwas) %>% .[hits@from,],
-                       as.data.frame(gtf) %>% .[hits@to,]) %>%
-  remove_rownames() %>%
-  dplyr::select(locus, gene) %>%
-  distinct() %>%
-  mutate(coding = 1) %>%
-  left_join(x = ., 
-            y = distinct(ld[,c("SNPS", "LEAD_SNP")]), 
-            by = c("locus"="SNPS"))
-
-## Anything that is NA in LEAD_SNP is column the locus is the lead snp
-coding.hits[which(is.na(coding.hits$LEAD_SNP)), "LEAD_SNP"] <- coding.hits[which(is.na(coding.hits$LEAD_SNP)), "locus"] 
-save(coding.hits, file = "/drive-pool/data/peter_data/genetic_programming/code/brca/ld.coding.hits.rda") ## 23 hits in coding (ld now has 234 gene hit)
-
-```
-
-Highly Mutated/Cancer Gene Objective Function
+Create Cancer Gene Objective Function
 ```{r}
 cosmic_cancer_consus <- fread(file = "/drive-pool/data/peter_data/genetic_programming/shared_data/Census_allThu Aug 10 16 27 49 2023.tsv") %>%
   .[grep(pattern = "breast", x = .$"Tumour Types(Somatic)")] %>% ## Select genes associated with breast cancer
