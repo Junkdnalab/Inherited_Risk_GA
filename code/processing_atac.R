@@ -1,54 +1,16 @@
-rm(list = ls(all.names = T)); gc()
-library(data.table)
-library(tidyverse)
-
-df <- fread("~/SraRunTable.txt") %>%
-  dplyr::filter(gender_identity == "cis-female")
-
-
-
-write.table(df$Run, file = "/drive-pool/data/peter_data/sc_data/brca/GSE168837/gse168837_sra.txt", quote = FALSE, row.names = FALSE, col.names = FALSE)
-cat(df$Run,sep=",", file = "/drive-pool/data/peter_data/sc_data/brca/GSE168837/cr_atac_sra.txt")
-
-## Gonna focus on this sample for nowSRR13956915 
-
-
-
-path <- "/drive-pool/data/peter_data/sc_data/brca/GSE168837/fastq/"
-files <- list.files(path = path, pattern = "SRR13956915")
-
-## After cellranger atac count... checking if all these barcode are present and for the correct sample
-barcodes <- fread(file = "~/sample345/outs/filtered_peak_bc_matrix/barcodes.tsv", header = FALSE)
-
-## Filter data for cis female single cell data
-sample_type <- c("CF", "Cis female") 
-
-## ATAC data
-atac.se <- readRDS("/drive-pool/data/peter_data/sc_data/brca/GSE168837/GSE168837_peakMatrix_update.rds")
-atac.se <- atac.se[, atac.se$SampleType == sample_type]
-
-atac.data <- as.data.frame(atac.se@colData) %>% dplyr::filter(SampleName == "CF-318-813") %>% 
-  rownames_to_column(var = "sample") %>% dplyr::select(sample) #%>%
-  
-atac.df <- atac.data %>% separate(sample, c("id", "barcode"), sep = "#")
-
-knott.barcode <- unique(atac.df$barcode)
-
-
-table(knott.barcode %in% unique(barcodes$V1))
-
 ####################
 ## ArchR analysis ##
 library(ArchR)
+library(data.table)
 library(tidyverse)
 set.seed(514)
 
+## Specify genome 
 addArchRGenome("hg38")
 
-outdir <- "/drive-pool/data/peter_data/sc_data/brca/GSE168837/archr/"
+outdir <- "/drive-pool/data/peter_data/sc_data/brca/GSE168837/archr/" ## output dir
 
-outdir <- "~"
-
+## Fragment files obtained cell ranger. Check cellranger_count.py
 inputFiles <- c("/drive-pool/data/peter_data/sc_data/brca/GSE168837/cellranger_count_output/CF-0404/outs/fragments.tsv.gz",
                 "/drive-pool/data/peter_data/sc_data/brca/GSE168837/cellranger_count_output/CF-1380/outs/fragments.tsv.gz",
                 "/drive-pool/data/peter_data/sc_data/brca/GSE168837/cellranger_count_output/CF-2099/outs/fragments.tsv.gz",
@@ -58,10 +20,10 @@ inputFiles <- c("/drive-pool/data/peter_data/sc_data/brca/GSE168837/cellranger_c
                 "/drive-pool/data/peter_data/sc_data/brca/GSE168837/cellranger_count_output/CF-7780/outs/fragments.tsv.gz",
                 "/drive-pool/data/peter_data/sc_data/brca/GSE168837/cellranger_count_output/CF-318-813/outs/fragments.tsv.gz")
 
+## Sample name
 names(inputFiles) <- c("CF-0404", "CF-1380", "CF-2099", "CF-2797", "CF-4014", "CF-428-112", "CF-7780", "CF-318-813")
 
-inputFiles
-
+## Create arrowfiles required for ArchR
 ArrowFiles = createArrowFiles(
   inputFiles=inputFiles,
   sampleNames=names(inputFiles),
@@ -74,7 +36,7 @@ ArrowFiles = createArrowFiles(
 projCis <- ArchRProject(
   ArrowFiles = ArrowFiles,
   outputDirectory = outdir,
-  copyArrows = TRUE #This is recommened so that if you modify the Arrow files you have an original copy for later usage.
+  copyArrows = TRUE #This is recommended so that if you modify the Arrow files you have an original copy for later usage.
 )
 
 saveArchRProject(ArchRProj = projCis, outputDirectory = "Save-projCis", load = FALSE)
@@ -89,40 +51,47 @@ doubScores <- addDoubletScores(
 ## Investigate the cells with different cutoffs
 peakobj = doubScores
 
-require(reshape2)
-newdf = melt(as.data.frame(peakobj@cellColData[,c("TSSEnrichment", "NucleosomeRatio", "BlacklistRatio", "DoubletEnrichment")]))
-
-P = ggplot(newdf, aes(x=value, fill=variable), colour="black") +
-  geom_histogram() +
-  facet_wrap(~variable, scales="free", nrow=1) +
-  scale_fill_brewer(name="", palette="Set1") +
-  xlab("") +
-  theme_bw(base_size=14) +
-  theme(legend.position="bottom")
-P
+## Before filtering plot
+# require(reshape2)
+# newdf = melt(as.data.frame(peakobj@cellColData[,c("TSSEnrichment", "NucleosomeRatio", "BlacklistRatio", "DoubletEnrichment")]))
+# 
+# P = ggplot(newdf, aes(x=value, fill=variable), colour="black") +
+#   geom_histogram() +
+#   facet_wrap(~variable, scales="free", nrow=1) +
+#   scale_fill_brewer(name="", palette="Set1") +
+#   xlab("") +
+#   theme_bw(base_size=14) +
+#   theme(legend.position="bottom")
+# P
 
 filtered.obj <- filterDoublets(doubScores)
 
-newdf = melt(as.data.frame(filtered.obj@cellColData[,c("PromoterRatio", "NucleosomeRatio", "BlacklistRatio", "DoubletEnrichment")]))
+## After filtering plot 
+# newdf = melt(as.data.frame(filtered.obj@cellColData[,c("PromoterRatio", "NucleosomeRatio", "BlacklistRatio", "DoubletEnrichment")]))
+# 
+# P = ggplot(newdf, aes(x=value, fill=variable), colour="black") +
+#   geom_histogram() +
+#   facet_wrap(~variable, scales="free", nrow=1) +
+#   scale_fill_brewer(name="", palette="Set1") +
+#   xlab("") +
+#   theme_bw(base_size=14) +
+#   theme(legend.position="bottom")
+# P
 
-P = ggplot(newdf, aes(x=value, fill=variable), colour="black") +
-  geom_histogram() +
-  facet_wrap(~variable, scales="free", nrow=1) +
-  scale_fill_brewer(name="", palette="Set1") +
-  xlab("") +
-  theme_bw(base_size=14) +
-  theme(legend.position="bottom")
-P
-
-
+## Additional filters
 idx_cells = which(filtered.obj@cellColData$PromoterRatio >= 0.1 &
                     filtered.obj@cellColData$PromoterRatio <= 0.8 &
                     filtered.obj@cellColData$nFrags >= 1e3 &
                     filtered.obj@cellColData$nFrags <= 5e4 &
                     filtered.obj@cellColData$NucleosomeRatio < 4)
-# filtered.obj@cellColData$DoubletEnrichment < 3.5)
+
 
 ## Checking barcode with knott's published paper.
+## ATAC data
+## Acquired peakMatrix from https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE168837
+atac.se <- readRDS("/drive-pool/data/peter_data/sc_data/brca/GSE168837/GSE168837_peakMatrix_update.rds")
+atac.se <- atac.se[, atac.se$SampleType == sample_type]
+
 orig.paper <- as.data.frame(atac.se@colData) %>% rownames_to_column(var = "id") %>%
   dplyr::select(id, predictedCellType) %>%
   separate(id, c("id", "data", "barcode"), sep = "_|#")
@@ -190,37 +159,26 @@ metadf = as.data.frame(filtered.obj@cellColData)
 
 saveRDS(metadf, file="metadata_archr.RDS", compress=TRUE)
 
-## Plot umap
+## Plot umap to compare between ours and knott's data (checking reproducibility)
 metadf = as.data.frame(filtered.obj@cellColData)
 umapdf = as.data.frame(filtered.obj@embeddings@listData$AfterHarmony@listData$df)
 colnames(umapdf) = c("UMAP1", "UMAP2")
-#umapdf$CellType = metadf[rownames(umapdf), "predictedCellType"]
-# textdf = do.call("rbind", lapply(unique(umapdf$CellType), function(x){
-#   tempdf = umapdf[umapdf$CellType==x, ]
-#   outdf = data.frame(UMAP1=mean(tempdf[,1]), UMAP2=mean(tempdf[,2]), CellType=x)
-#   return(outdf)}))
-# umapdf$CellType = factor(umapdf$CellType, levels=cols[,1])
-# umapdf$SampleType = ifelse(grepl("CF", metadf[rownames(umapdf), "SampleName"]), "Cis female", "Trans male")
-# textdf$SampleType = "Cis female"
+
 
 umapdf <- umapdf %>% mutate(id = rownames(.)) %>% separate(id, c("id", "barcode"), sep = "#") %>%
   left_join(x = ., y = match.cells[, c("id", "barcode", "predictedCellType")], by = c("id", "barcode"))
-test <- umapdf %>% dplyr::filter(!is.na(predictedCellType))
-# cell.color <- data.frame(predictedCellType = unique(test$predictedCellType),
-#                          color = c("#58986b", "#58c8c9", "grey", "#055820", 
-#                                    "#758609", "#5c1505", "#bac95a", "#08305d",
-#                                    "#6b3a71", "#d5626f"))
+umapdf <- umapdf %>% dplyr::filter(!is.na(predictedCellType))
+
 group.colors <- c("LUM_HR-pos"="#58986b", "LUM_HR-neg"="#58c8c9", "Lymphoid"="grey", "Basal"="#055820", 
                   "Myeloid"="#758609", "Blood_EC"="#5c1505", "Adipocyte"="#bac95a", "Fibroblast"="#08305d", 
                   "Lymph_EC"="#6b3a71", "Vasc.Acc."="#d5626f")
 
-colordf <- test %>% dplyr::select(predictedCellType) %>%
+colordf <- umapdf %>% dplyr::select(predictedCellType) %>%
   left_join(x = ., y = cell.color, by = c("predictedCellType"))
-#outdir_temp = paste(outdir, "Plots/temp", sep="/")
-P = ggplot(test, aes(x=UMAP1, y=UMAP2, colour = predictedCellType)) +
+
+P = ggplot(umapdf, aes(x=UMAP1, y=UMAP2, colour = predictedCellType)) +
   geom_point(alpha=0.8) +
   scale_colour_manual(values=group.colors) +
-  #geom_label_repel(data=textdf, aes(label=CellType)) +
   theme_bw(base_size=14)
 P
 
@@ -265,6 +223,7 @@ saveArchRProject(ArchRProj = filtered.obj, outputDirectory = "Save-projCis", loa
 
 filtered.obj <- addGroupCoverages(ArchRProj = filtered.obj, groupBy = "CellTypeAndSampleType", force=TRUE)
 
+## Used macs2 to find peaks
 pathToMacs2 = "/home/p3nguyen/miniconda3/bin/macs2"
 
 filtered.obj <- addReproduciblePeakSet(
@@ -331,9 +290,9 @@ filtered.obj <- addClusters(
 
 saveArchRProject(ArchRProj = filtered.obj, outputDirectory = "Save-projCis", load = FALSE)
 
-## Add co-accessibility and gene-links
-
-
+#########################
+## Get MarkerATAC list ## Used for isMarkerATAC
+#########################
 markersPeaks <- getMarkerFeatures(
   ArchRProj = filtered.obj,
   useMatrix = "PeakMatrix",
@@ -347,40 +306,12 @@ cutoff_condition = "FDR <= 0.05 & Log2FC >= 0.25"
 markerList <- getMarkers(markersPeaks, cutOff = cutoff_condition)
 #save(markerList, file = "/drive-pool/data/peter_data/sc_data/brca/GSE168837/arrowFiles/PeakCalls/markerList.rda")
 
-dir.create(sprintf("/PeakCalls/peakTsvFiles"))
-outdir <- "/drive-pool/data/peter_data/sc_data/brca/GSE168837/arrowFiles/"
-
-for(clustername in names(markerList)){
-  peakdf = as.data.frame(markerList[[clustername]])
-  if(nrow(peakdf) > 0){
-    outpath = sprintf("%s/PeakCalls/peakTsvFiles/%s.tsv",
-                      outdir, gsub(" ", "_", clustername))
-    cat(sprintf("Saving to %s\n", outpath))
-    write.table(peakdf, file=outpath, sep="\t", quote=F, row.names=F)
-  }
-}
-
-heatmapPeaks <- markerHeatmap(
-  seMarker = markersPeaks,
-  cutOff = cutoff_condition,
-  transpose = TRUE
-)
-
-plotPDF(heatmapPeaks, name = "Peak-Marker-Heatmap", width = 12, height = 8, ArchRProj = filtered.obj, addDOC = FALSE)
-
-pma <- markerPlot(seMarker = markersPeaks, name = "LUM_HR-pos CF", cutOff = cutoff_condition, plotAs = "MA")
-
-pv <- markerPlot(seMarker = markersPeaks, name = "LUM_HR-pos CF", cutOff = cutoff_condition, plotAs = "Volcano")
-
-plotPDF(pma, pv, name = "LUM_HR-pos-CisFemale-Markers-MA-Volcano", width = 5, height = 5, ArchRProj = filtered.obj, addDOC = FALSE)
-
-
 ## Linking atac marker peaks to snps
-load("/drive-pool/data/peter_data/genetic_programming/code/brca/gwas_finemap.rda")
-load("/drive-pool/data/peter_data/genetic_programming/code/brca/snpinLD.rda")
+load("/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/gwas_gp_manu_data/gwas_snps.rda")
+load("/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/gwas_gp_manu_data/snpinLD.rda")
 
 ## Get all snps (lead snp +  ld)
-all.snps <- gwas_finemap[,c("CHR_ID", "CHR_POS", "SNP_ID_CURRENT")] %>%
+all.snps <- gwas_snps[,c("CHR_ID", "CHR_POS", "SNP_ID_CURRENT")] %>%
   dplyr::rename("SNPS"="SNP_ID_CURRENT") %>%
   rbind(.,
         ld[,c("CHR_ID", "CHR_POS", "SNPS")]) %>%
@@ -395,9 +326,9 @@ gwas <- GRanges(seqnames = Rle(paste0("chr", all.snps$CHR_ID)),
 
 load("/drive-pool/data/peter_data/sc_data/brca/GSE168837/arrowFiles/PeakCalls/markerList.rda")
 
-
+## Get list of cell types
 celltype <- names(markerList@listData)
-atac.marker <- list()
+atac.marker <- list() ## Store result from for loop below
 
 for(n in celltype) {
   marker.df <- as.data.frame(markerList@listData[[n]])
@@ -414,9 +345,6 @@ for(n in celltype) {
     ## Find overlaps between snp and atac region
     hits <- findOverlaps(query = gwas, subject = marker.granges)
     ## Extract results
-    # marker.hit <- as.data.frame(gwas) %>% .[hits@from,] %>% remove_rownames() %>% 
-    #   dplyr::select(locus) %>% distinct() %>%
-    #   mutate(celltype = p)
     marker.hit <- cbind(as.data.frame(gwas) %>% .[hits@from,],
                         as.data.frame(marker.granges) %>% .[hits@to,]) %>%
       .[,6:13] %>% remove_rownames() %>%
@@ -435,7 +363,7 @@ atac.marker <- as.data.frame(do.call(rbind, atac.marker)) %>% remove_rownames() 
 ## Anything that is NA in LEAD_SNP is column the locus is the lead snp
 atac.marker[which(is.na(atac.marker$LEAD_SNP)), "LEAD_SNP"] <- atac.marker[which(is.na(atac.marker$LEAD_SNP)), "locus"] 
 
-save(atac.marker, file = "/drive-pool/data/peter_data/genetic_programming/code/brca/ld_atac.marker.rda")
+save(atac.marker, file = "/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/gwas_gp_manu_data/ld_atac.marker.rda")
 
 #######################################
 ## Finding Common Peaks in ATAC data ##
@@ -455,12 +383,9 @@ gwas <- GRanges(seqnames = Rle(paste0("chr", all.snps$CHR_ID)),
                                 end = as.numeric(all.snps$CHR_POS) + 499),
                 locus = all.snps$SNPS,
                 chr_pos = as.numeric(all.snps$CHR_POS))
-
+## Find overlaps between snp and atac region
 hits <- findOverlaps(query = gwas, subject = peakset)
 ## Extract results
-# marker.hit <- as.data.frame(gwas) %>% .[hits@from,] %>% remove_rownames() %>% 
-#   dplyr::select(locus) %>% distinct() %>%
-#   mutate(celltype = p)
 common.atac.hit <- cbind(as.data.frame(gwas) %>% .[hits@from,],
                     as.data.frame(peakset) %>% .[hits@to,]) %>% 
   remove_rownames() %>%
@@ -474,40 +399,6 @@ common.atac.hit <- cbind(as.data.frame(gwas) %>% .[hits@from,],
 
 common.atac.hit[which(is.na(common.atac.hit$LEAD_SNP)), "LEAD_SNP"] <- common.atac.hit[which(is.na(common.atac.hit$LEAD_SNP)), "locus"] 
 
-save(common.atac.hit, file = "/drive-pool/data/peter_data/genetic_programming/code/brca/ld_common_atac_peak.rda")
-load("/drive-pool/data/peter_data/genetic_programming/code/brca/ld_common_atac_peak.rda")
-
-## Test stuff to see peaks
-peakset <- getPeakSet(projCis)
-peakset <- peakset[names(peakset) %in% c("Fibroblast CF", "LUM_HR-neg CF"),]
-
-rs45631563.region <- GRanges(seqnames = Rle("chr10"),
-                             range = IRanges(start = 81500000,
-                                             end = 86500000))
-
-
-p <- plotBrowserTrack(
-  ArchRProj = projCis, 
-  plotSummary = c("bulkTrack", "featureTrack", "geneTrack"),
-  sizes = c(10, 3, 4),
-  groupBy = "CellTypeAndSampleType", 
-  #geneSymbol = c("FGFR2"),
-  region = rs45631563.region,
-  features =  peakset,
-  #upstream = 10000,
-  #downstream = 10000
-)
-
-dev.off()
-png(filename = "~/ld_atactest.png", height = 150, width = 150, unit = "mm", res = 300)
-grid::grid.draw(p)
-dev.off()
-
-atac.peaks <- data.frame(sample = names(peakset),
-                         seqnames = peakset@seqnames,
-                         start = peakset@ranges@start,
-                         end = peakset@ranges@start + peakset@ranges@width - 1,
-                         width = peakset@ranges@width)
-
-
+save(common.atac.hit, file = "/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/gwas_gp_manu_data/ld_common_atac_peak.rda")
+load("/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/gwas_gp_manu_data/ld_common_atac_peak.rda")
 
