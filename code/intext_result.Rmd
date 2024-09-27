@@ -1,0 +1,794 @@
+---
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+Application of GA on BCa GWAS (OF score, elite and consensus eval)
+```{r}
+##############
+## OF Score ##
+##############
+
+## Load all functions used in GA. Not all in use.
+source("/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/code/gp_fun_update.R")
+## Load data
+load("/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/data/progressive_breast_run_10_ppithres0_092324.rda")
+## Get OF mean 
+of.mean <- getOFmean(data = multi.gp, type = "breast", omic = "yes") ## Look at gen 199
+
+########################
+## Elite vs Consensus ##
+########################
+
+## Calculate OF score for consensus proposal
+load("/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/gwas_gp_manu_data/breast_essential_092424.rda")
+
+############
+## PPI df ##
+load("/drive-pool/data/peter_data/genetic_programming/code/brca/ppi.map.rda"); rm(map.genes)
+
+ppi.threshold <- 0.0 ## Confidence score for ppi interaction by stringdb. Medium confid 0.4; High confid 0.7; highest confid 0.9
+
+## Update the link data to have gene symbol
+str.db.link <- str.db.link %>% dplyr::select(protein1, protein2, experiments, 
+                                             experiments_transferred, combined_score) %>%
+  left_join(x = ., y = str.db.info, by = c("protein1"="string_id")) %>%
+  dplyr::rename("gene1"="gene_symbol") %>%
+  left_join(x = ., y = str.db.info, by = c("protein2"="string_id")) %>%
+  dplyr::rename("gene2"="gene_symbol") %>%
+  .[,c("protein1", "protein2", "gene1", "gene2", "experiments", "experiments_transferred", "combined_score")]
+
+ppi <- str.db.link %>% dplyr::filter(gene1 %in% nearbygenes$gene_name,
+                                     gene2 %in% nearbygenes$gene_name) %>% ## Filter for specific genes found in gwas 200kb
+  group_by(grp = paste(pmax(gene1, gene2), pmin(gene1, gene2), sep = "_")) %>%
+  dplyr::filter(row_number() == 1) %>%
+  ungroup() %>%
+  dplyr::select(-grp) %>%
+  distinct() %>%
+  mutate(experiments_score = compute_prior_away(score = experiments),
+         experiments_transferred_score = compute_prior_away(score = experiments_transferred)) %>% 
+  mutate(experiments_both_prior_corrected = 1 - (1 - experiments_score) * (1 - experiments_transferred_score)) %>% 
+  mutate(final_score = (experiments_both_prior_corrected * (1 - 0.041)) + 0.041) %>%
+  filter(final_score > ppi.threshold) %>%
+  dplyr::select(gene1, gene2);# rm(str.db.info, str.db.link); gc()
+
+
+
+## Prepare intra.cellular ppi
+## Remove gene combo found in celltalkdb
+celltalk_gene <- celltalkdb %>% dplyr::select(source_genesymbol, target_genesymbol) %>%
+  dplyr::rename("gene1"="source_genesymbol", "gene2"="target_genesymbol") %>%
+  group_by(grp = paste(pmax(gene1, gene2), 
+                       pmin(gene1, gene2), sep = "_"))
+
+intra.ppi.gene <- ppi %>% 
+  group_by(grp = paste(pmax(gene1, gene2), 
+                       pmin(gene1, gene2), sep = "_")) %>%
+  dplyr::filter(!grp %in% celltalk_gene$grp) %>%
+  dplyr::filter(row_number() == 1) %>%
+  ungroup() %>%
+  dplyr::select(-grp) %>%
+  distinct()
+
+
+
+## Get consensus and calculate fitness score of consensus
+res <- multi.gp[["proposal"]] %>%
+  get.consensus.run(data = ., loci = 206)  ## Get consensus (top gene and cell type calls for each locus)
+data <- res %>% dplyr::select(locus, gene, celltype) ## Filter for specific column
+obj.fun <- c("marker.gene", "magma", "cancer.gene", "ppi", "marker.ppi", "inter.ppi", "intra.ppi",
+             "lncrna", "promoter","marker.atac", "common.atac") ## Objective function used
+b_res <- getOFhits(data = data, obj.fun = obj.fun) ## Get objective function hits for each locus
+
+consensus.score <- b_res %>% dplyr::select(-locus, -gene, -celltype) %>%
+  colSums() %>% as.data.frame() %>%
+  dplyr::rename("raw.score" = ".") %>%
+  mutate(ofscore = raw.score / 206) %>%
+  dplyr::select(-raw.score) %>% 
+  t() %>% as.data.frame()
+
+consensus.score$fitness = mean(as.numeric(consensus.score[1,]))
+
+## Plotdata to generate OF density curve
+last.gen <- multi.gp[[200]] %>% dplyr::select(-n) %>% 
+  gather(data = ., key = "of", value = "score", -gen)
+
+## Identified top propsal using multi.gp[["fitness]] data
+top.proposal <- multi.gp[[200]] %>% dplyr::filter(n == 1199)
+
+## Get fitness score
+n <- "fitness"
+tp.score <- top.proposal[1, which(colnames(top.proposal) == n)]
+c.score <- consensus.score[1, which(colnames(consensus.score) == n)]
+
+## Compare individual OF
+top.scores <- top.proposal %>% dplyr::select(names(consensus.score)) ## Match column of consensus solution
+
+compare.consensus.top.of <- rbind(consensus.score, top.scores) %>%
+  "rownames<-" (c("consensus", "elite")) %>%
+  t() %>% as.data.frame() %>% 
+  mutate(type = case_when(consensus > elite ~ "C", ## Comparing who's better in each OF function
+                          consensus < elite ~ "E",
+                          consensus == elite ~ "Same"))
+
+
+```
+
+Breast GA optimization identify known targets (L2G and nearest model comparison)
+```{r}
+rm(list = ls(all.names = T)); gc()
+library(biomaRt)
+
+load("/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/gwas_gp_manu_data/l2g.res.rda")
+
+## Simplify res. Only need chr, start and end
+l2g.res <- data.frame(chrom = l2g.top$chrom,
+                      start = l2g.top$pos,
+                      end = l2g.top$pos)
+## SNP ensembl
+ensembl_snp <- useEnsembl(biomart = "snps",
+                          dataset = "hsapiens_snp",
+                          version = "112") 
+# Check version from the website. check bottom left corner https://useast.ensembl.org/index.html
+
+## Load breast data
+load("/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/gwas_gp_manu_data/gwas_snps.rda")
+## Only works with rsid - make sure it's rsid only
+rsid <- gwas_snps$SNP_ID_CURRENT
+
+bm.snp <- getBM(attributes = c('refsnp_id','chr_name','chrom_start','chrom_end','allele'),
+                filters = c("snp_filter"),                 
+                values = list(rsid),
+                mart = ensembl_snp)
+
+bm.snp <- bm.snp[-grep(pattern = "H", x = bm.snp$chr_name),] ## Get rid of scaffold (chr_name that start with H)
+
+## 205 out of 206. whats the missing rsid?
+# save(bm.snp, file = "/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/gwas_gp_manu_data/bm.snp.rda")
+load("/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/gwas_gp_manu_data/bm.snp.rda")
+rsid[which(!rsid %in% bm.snp$refsnp_id)] ## rs8176636 ## Not found in hg38 build
+
+## Append biomart gene info from bm.snp to gwas_snps
+gwas.df <- gwas_snps %>% left_join(x = ., y = bm.snp, by = c("SNP_ID_CURRENT"="refsnp_id"))
+
+## Combine gwas.df with l2g.top by chromosome name and position
+l2g.df.match <- gwas.df %>% left_join(x = ., y = l2g.top, by = c("chr_name"="chrom", "chrom_start"="pos"))
+l2g.df.match <- l2g.df.match %>% dplyr::select(SNP_ID_CURRENT, gene_id, l2g_score)
+
+## Add genome annotation. Convert ENSG to human readable gene name
+load("/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/gwas_gp_manu_data/geneAnnot.df.rda")
+
+## A total of 175 matches between L2G and GWAS SNP
+l2g.gwas <- l2g.df.match %>% left_join(x = ., y = geneAnnot.df, by = "gene_id") %>% 
+  dplyr::select(SNP_ID_CURRENT, gene_id, gene_name, gene_type, l2g_score) %>%
+  na.omit() ## Remove SNP without any matches between gwas and l2g
+
+source("/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/code/gp_fun_update.R") ## Load functions
+
+load("/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/data/progressive_breast_run_10_ppithres0_092324.rda")
+
+## Get consensus proposal for breast run
+consensus.proposal <- get.consensus.run(data = multi.gp[["proposal"]], loci = 206)
+
+## Append L2G top genes with consensus genes from breast run
+combined.df <- l2g.gwas %>% left_join(x = ., y = consensus.proposal, by = c("SNP_ID_CURRENT"="locus"))
+
+table(combined.df$gene_name == combined.df$gene) ## Comparing L2G ("gene_name) with consensus gene ("gene")
+## 82 out of 175 are match
+combined.df[which(combined.df$gene_name != combined.df$gene),]
+
+##################################
+## Add in closest gene data set ##
+load("/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/gwas_gp_manu_data/breast_essential_092424.rda")
+
+## Prep nearbygenes to get closest gene tss
+proteincoding.distance.tss <- nearbygenes %>% dplyr::filter(gene_type == "protein_coding") %>% ## Filter for only protein-coding
+  mutate(abs_distance_tss = abs(distance_tss)) ## Absolute value transform
+
+## Loop through each snp and pick the closest gene
+closestgene.distance.tss <- list()
+counter <- 1 ## Just a counter for the list
+for(n in unique(proteincoding.distance.tss$snp)) {
+  df.closest <- proteincoding.distance.tss %>%
+    dplyr::filter(snp == n) %>% ## Filter for snp
+    arrange(abs_distance_tss) %>% ## Increasing order 
+    .[1,]
+  ## Store data in list
+  closestgene.distance.tss[[counter]] <- df.closest
+  counter <- counter + 1
+}
+closestgene.distance.tss <- as.data.frame(do.call(rbind, closestgene.distance.tss))
+closestgene.distance.tss <- closestgene.distance.tss %>% dplyr::select(snp, gene_name) %>%
+  dplyr::rename("closestgene"="gene_name")
+
+combined.df2 <- consensus.proposal %>% left_join(x = ., y = closestgene.distance.tss, 
+                                          by = c("locus"="snp"))
+table(combined.df2$closestgene == combined.df2$gene) ## Comparing consesnsus ("gene") with nearest gene ("closestgene")
+## 86 out of 206 of consensus gene are the nearest
+
+## Append closest gene to combined.df (175)
+combined.df <- combined.df %>% left_join(x = ., y = closestgene.distance.tss, by = c("SNP_ID_CURRENT"="snp"))
+table(combined.df$closestgene == combined.df$gene_name) ## 136 out of 175
+
+snp.set1.same <- combined.df2[which(combined.df2$closestgene == combined.df2$gene), "locus"] ## closest gene and consensus
+snp.set2.same <- combined.df[which(combined.df$gene_name == combined.df$gene), ] %>% pull(SNP_ID_CURRENT)
+
+## How many are nearest gene? 68 are nearest gene 
+table(snp.set2.same %in% snp.set1.same)
+## Valid.snps are a set of snp that are nearest genes, l2g and consensus approved
+valid.snps <- snp.set2.same[which(snp.set2.same %in% snp.set1.same)]
+```
+
+Contribution of individual OFs to overall fitness (OF enrichment in gen0 and gen200)
+```{r}
+rm(list = ls(all.names = T)); gc()
+source("/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/code/gp_fun_update.R")
+
+## Breast data result
+load("/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/gwas_gp_manu_data/breast_essential_092424.rda")
+load("/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/data/progressive_breast_run_10_ppithres0_092324.rda")
+
+## We want PPI threshold to be 0 so remaking these data
+load("/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/gwas_gp_manu_data/ppi.map.rda"); rm(map.genes)
+
+ppi.threshold <- 0 ## Confidence score for ppi interaction by stringdb. Medium confid 0.4; High confid 0.7; highest confid 0.9
+
+## Update the link data to have gene symbol
+str.db.link <- str.db.link %>% dplyr::select(protein1, protein2, experiments, 
+                                             experiments_transferred, combined_score) %>%
+  left_join(x = ., y = str.db.info, by = c("protein1"="string_id")) %>%
+  dplyr::rename("gene1"="gene_symbol") %>%
+  left_join(x = ., y = str.db.info, by = c("protein2"="string_id")) %>%
+  dplyr::rename("gene2"="gene_symbol") %>%
+  .[,c("protein1", "protein2", "gene1", "gene2", "experiments", "experiments_transferred", "combined_score")]
+
+ppi <- str.db.link %>% dplyr::filter(gene1 %in% nearbygenes$gene_name, 
+                                     gene2 %in% nearbygenes$gene_name) %>% ## Filter for specific genes found in gwas 200kb
+  group_by(grp = paste(pmax(gene1, gene2), pmin(gene1, gene2), sep = "_")) %>%
+  dplyr::filter(row_number() == 1) %>%
+  ungroup() %>%
+  dplyr::select(-grp) %>%
+  distinct() %>%
+  mutate(experiments_score = compute_prior_away(score = experiments),
+         experiments_transferred_score = compute_prior_away(score = experiments_transferred)) %>% 
+  mutate(experiments_both_prior_corrected = 1 - (1 - experiments_score) * (1 - experiments_transferred_score)) %>% 
+  mutate(final_score = (experiments_both_prior_corrected * (1 - 0.041)) + 0.041) %>%
+  filter(final_score > ppi.threshold) %>%
+  dplyr::select(gene1, gene2); rm(str.db.info, str.db.link); gc()
+
+
+## Prepare intra.cellular ppi
+## Remove gene combo found in celltalkdb
+celltalk_gene <- celltalkdb %>% dplyr::select(source_genesymbol, target_genesymbol) %>%
+  dplyr::rename("gene1"="source_genesymbol", "gene2"="target_genesymbol") %>%
+  group_by(grp = paste(pmax(gene1, gene2), 
+                       pmin(gene1, gene2), sep = "_"))
+
+intra.ppi.gene <- ppi %>% 
+  group_by(grp = paste(pmax(gene1, gene2), 
+                       pmin(gene1, gene2), sep = "_")) %>%
+  dplyr::filter(!grp %in% celltalk_gene$grp) %>%
+  dplyr::filter(row_number() == 1) %>%
+  ungroup() %>%
+  dplyr::select(-grp) %>%
+  distinct()
+
+#####################
+## Data processing ##
+
+## Get consensus for initial and final generation
+final.res <-  multi.gp[["proposal"]] %>%
+  get.consensus.run(data = ., loci = 206)
+
+initial.res <-  multi.gp[["init.proposal"]] %>%
+  get.consensus.run(data = ., loci = 206)
+
+## Get OF scores for the following...
+obj.fun <- c("marker.gene", "magma", "cancer.gene", "ppi", "marker.ppi", "inter.ppi", "intra.ppi",
+             "lncrna", "promoter","marker.atac", "common.atac") ## Objective function used
+
+b_final.res <- final.res %>% dplyr::select(locus, gene, celltype) %>% getOFhits(data = ., obj.fun = obj.fun) ## Get objective function hits for each locus
+b_initial.res <- initial.res %>% dplyr::select(locus, gene, celltype) %>% getOFhits(data = ., obj.fun = obj.fun)
+
+##############################
+## Get posterior probability##
+
+process.ga.res <- function(data, type) { ## type: what type of data (breast, control, alzheimzer, etc)
+  
+  data <- data %>% dplyr::select(-locus, -gene, -celltype) %>% 
+    colSums() %>% as.data.frame() %>%
+    dplyr::rename("hits" = ".") %>%
+    mutate(no_hits = nrow(data) - hits,
+           type = type)
+}
+## Function to perform rbeta distribution
+get.beta.distribution <- function(data, type, n = 1e5) {
+  res <- list()
+  for(p in rownames(data)) {
+    df <- data[which(rownames(data) == p), ]
+    rbeta.df <- data.frame(prob = rbeta(n = n, shape1 = df[,"hits"], shape2 = df[,"no_hits"]),
+                           of = p)
+    res[[p]] <- rbeta.df
+  }
+  res <- as.data.frame(do.call(rbind, res)) %>% remove_rownames %>%
+    mutate(type = type)
+}
+
+b_final.data <- process.ga.res(data = b_final.res, type = "breast_final")
+b_final.data <- get.beta.distribution(data = b_final.data, type = "breast_final")
+
+b_initial.data <- process.ga.res(data = b_initial.res, type = "breast_initial")
+b_initial.data <- get.beta.distribution(data = b_initial.data, type = "breast_initial")
+
+## Map df to convert code OF to clean OF names
+map.of <- data.frame(of = c("marker.gene", "magma", "cancer.gene", "ppi", "marker.ppi", "inter.ppi",
+                            "intra.ppi", "lncrna", "promoter", "marker.atac", "common.atac"),
+                     new.of = c("Marker Gene", "MAGMA", "Cancer Gene", "PPI", "Marker PPI", "Inter-PPI",
+                                "Intra-PPI", "LncRNA-protein", "Promoter", "Marker ATAC", "Common ATAC"))
+
+combined.beta.data <- rbind(b_final.data, b_initial.data) %>% left_join(x = ., y = map.of, by = "of")
+
+type.color <- c("pink", "grey")
+names(type.color) <- c("breast_final", "breast_initial")
+
+
+ggplot(combined.beta.data, aes(x = prob, y = new.of, fill = type)) + geom_density_ridges(alpha = 0.5) +
+  xlab("Fraction of Positives") + ylab("") + #guides(fill = "none") +
+  scale_fill_manual(values = type.color) +
+  theme_bw() +
+  theme(axis.text.y = element_text(size = 15))
+
+## Getting the difference fg-bg to get significance and pvalue
+
+if(all(table(b_final.data$of == b_initial.data$of))) {
+  diff.beta <- b_final.data %>% dplyr::select(of) %>% 
+    mutate(fgminusbg = b_final.data$prob - b_initial.data$prob) %>%
+    left_join(x = ., y = map.of, by = "of")
+} else {
+  message("Two column for OF do not agree. Need to investigate. Do not proceed.")
+}
+
+## Getting stats for beta result
+stats.diff.beta <- list()
+CI <- 0.025
+
+for(n in unique(diff.beta$of)) {
+  of.diff <- diff.beta %>% dplyr::filter(of == n)
+  ## How many times is the fg greater than the bg
+  sig_fg_bg <- sum(of.diff$fgminusbg < 0)
+  
+  stats.diff.beta[[n]] <- data.frame(of = n,
+                                     new.of = unique(of.diff$new.of),
+                                     signif = sig_fg_bg,
+                                     pval = sig_fg_bg/1e5,
+                                     lower.lim = quantile(of.diff$fgminusbg, CI),
+                                     median = quantile(of.diff$fgminusbg, 0.5),
+                                     upper.lim = quantile(of.diff$fgminusbg, 1-CI)
+  )
+}
+
+stats.diff.beta <- as.data.frame(do.call(rbind, stats.diff.beta))
+
+## Get mean OF score for final gen consensus
+mean.of <- b_final.res %>% process.ga.res(data = ., type = "breast_final") %>%
+  mutate(mean_of = hits / 206)
+
+## Get number of lncRNA in consensus of final.
+b_final.res %>% dplyr::select(locus,gene) %>%
+  left_join(x = ., y = nearbygenes, by = c("locus"="snp", "gene"="gene_name")) %>% 
+  count(gene_type) ## 5 lncRNA
+```
+
+Contribution of individual OFs to overall fitness (information content between gen0 and gen200)
+```{r}
+rm(list = ls(all.names = T)); gc()
+source("/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/code/gp_fun_update.R")
+
+## Breast data result
+load("/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/gwas_gp_manu_data/breast_essential_092424.rda")
+load("/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/data/progressive_breast_run_10_ppithres0_092324.rda")
+
+## We want PPI threshold to be 0 so remaking these data
+load("/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/gwas_gp_manu_data/ppi.map.rda"); rm(map.genes)
+
+ppi.threshold <- 0 ## Confidence score for ppi interaction by stringdb. Medium confid 0.4; High confid 0.7; highest confid 0.9
+
+## Update the link data to have gene symbol
+str.db.link <- str.db.link %>% dplyr::select(protein1, protein2, experiments, 
+                                             experiments_transferred, combined_score) %>%
+  left_join(x = ., y = str.db.info, by = c("protein1"="string_id")) %>%
+  dplyr::rename("gene1"="gene_symbol") %>%
+  left_join(x = ., y = str.db.info, by = c("protein2"="string_id")) %>%
+  dplyr::rename("gene2"="gene_symbol") %>%
+  .[,c("protein1", "protein2", "gene1", "gene2", "experiments", "experiments_transferred", "combined_score")]
+
+ppi <- str.db.link %>% dplyr::filter(gene1 %in% nearbygenes$gene_name, 
+                                     gene2 %in% nearbygenes$gene_name) %>% ## Filter for specific genes found in gwas 200kb
+  group_by(grp = paste(pmax(gene1, gene2), pmin(gene1, gene2), sep = "_")) %>%
+  dplyr::filter(row_number() == 1) %>%
+  ungroup() %>%
+  dplyr::select(-grp) %>%
+  distinct() %>%
+  mutate(experiments_score = compute_prior_away(score = experiments),
+         experiments_transferred_score = compute_prior_away(score = experiments_transferred)) %>% 
+  mutate(experiments_both_prior_corrected = 1 - (1 - experiments_score) * (1 - experiments_transferred_score)) %>% 
+  mutate(final_score = (experiments_both_prior_corrected * (1 - 0.041)) + 0.041) %>%
+  filter(final_score > ppi.threshold) %>%
+  dplyr::select(gene1, gene2); rm(str.db.info, str.db.link); gc()
+
+
+## Prepare intra.cellular ppi
+## Remove gene combo found in celltalkdb
+celltalk_gene <- celltalkdb %>% dplyr::select(source_genesymbol, target_genesymbol) %>%
+  dplyr::rename("gene1"="source_genesymbol", "gene2"="target_genesymbol") %>%
+  group_by(grp = paste(pmax(gene1, gene2), 
+                       pmin(gene1, gene2), sep = "_"))
+
+intra.ppi.gene <- ppi %>% 
+  group_by(grp = paste(pmax(gene1, gene2), 
+                       pmin(gene1, gene2), sep = "_")) %>%
+  dplyr::filter(!grp %in% celltalk_gene$grp) %>%
+  dplyr::filter(row_number() == 1) %>%
+  ungroup() %>%
+  dplyr::select(-grp) %>%
+  distinct()
+
+#####################
+## Data processing ##
+
+## Get consensus for initial and final generation
+final.res <-  multi.gp[["proposal"]] %>%
+  get.consensus.run(data = ., loci = 206)
+
+initial.res <-  multi.gp[["init.proposal"]] %>%
+  get.consensus.run(data = ., loci = 206)
+
+## Get OF scores for the following...
+obj.fun <- c("marker.gene", "magma", "cancer.gene", "ppi", "marker.ppi", "inter.ppi", "intra.ppi",
+             "lncrna", "promoter","marker.atac", "common.atac") ## Objective function used
+
+b_final.res <- final.res %>% dplyr::select(locus, gene, celltype) %>% getOFhits(data = ., obj.fun = obj.fun) ## Get objective function hits for each locus
+b_initial.res <- initial.res %>% dplyr::select(locus, gene, celltype) %>% getOFhits(data = ., obj.fun = obj.fun)
+
+final.info <- b_final.res %>% dplyr::select(-locus, -gene, -celltype) %>% rowSums() %>% as.data.frame() %>%
+  dplyr::rename("ofhit"=".") %>%
+  mutate(type = "final")
+initial.info <- b_initial.res %>% dplyr::select(-locus, -gene, -celltype) %>% rowSums() %>% as.data.frame() %>%
+  dplyr::rename("ofhit"=".") %>%
+  mutate(type = "initial")
+
+combined.info <- rbind(final.info, initial.info)
+
+ggplot(data = combined.info, aes(x = ofhit)) +
+  geom_density(alpha = 0.5, aes(fill = type)) +
+  theme_minimal() + 
+  xlab("Information Content") + ylab("Density") +
+  guides(group="none", fill = "none") +
+  theme(legend.position = "none")
+
+
+mean(final.info$ofhit)
+sd(final.info$ofhit)
+mean(initial.info$ofhit)
+sd(initial.info$ofhit)
+
+table(final.info$ofhit <= 0)
+table(initial.info$ofhit <= 0)
+
+ks.test(final.info$ofhit, initial.info$ofhit)
+```
+
+
+Contribution of individual OFs to overall fitness (information content breast vs control last gen)
+```{r}
+
+## Load functions
+source("/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/code/gp_fun.R")
+## For breast cancer data set
+files <- "/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/data/" 
+control_group <- paste0("breast")
+run_group <- paste0("run_", c(1:10))
+
+obj.fun <- c("marker.gene", "magma", "cancer.gene", "ppi", "marker.ppi", "inter.ppi", "intra.ppi",
+             "lncrna", "promoter","marker.atac", "common.atac") ## Objective function used
+
+load("/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/gwas_gp_manu_data/breast_essential_092424.rda")
+
+## We want PPI threshold to be 0 so remaking these data
+load("/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/gwas_gp_manu_data/ppi.map.rda"); rm(map.genes)
+    
+ppi.threshold <- 0.0 ## Confidence score for ppi interaction by stringdb. Medium confid 0.4; High confid 0.7; highest confid 0.9
+    
+## Update the link data to have gene symbol
+str.db.link <- str.db.link %>% dplyr::select(protein1, protein2, experiments, 
+                                             experiments_transferred, combined_score) %>%
+  left_join(x = ., y = str.db.info, by = c("protein1"="string_id")) %>%
+  dplyr::rename("gene1"="gene_symbol") %>%
+  left_join(x = ., y = str.db.info, by = c("protein2"="string_id")) %>%
+  dplyr::rename("gene2"="gene_symbol") %>%
+  .[,c("protein1", "protein2", "gene1", "gene2", "experiments", "experiments_transferred", "combined_score")]
+    
+ppi <- str.db.link %>% dplyr::filter(gene1 %in% nearbygenes$gene_name, 
+                                     gene2 %in% nearbygenes$gene_name) %>% ## Filter for specific genes found in gwas 200kb
+  group_by(grp = paste(pmax(gene1, gene2), pmin(gene1, gene2), sep = "_")) %>%
+  dplyr::filter(row_number() == 1) %>%
+  ungroup() %>%
+  dplyr::select(-grp) %>%
+  distinct() %>%
+  mutate(experiments_score = compute_prior_away(score = experiments),
+         experiments_transferred_score = compute_prior_away(score = experiments_transferred)) %>% 
+  mutate(experiments_both_prior_corrected = 1 - (1 - experiments_score) * (1 - experiments_transferred_score)) %>% 
+  mutate(final_score = (experiments_both_prior_corrected * (1 - 0.041)) + 0.041) %>%
+  filter(final_score > ppi.threshold) %>%
+  dplyr::select(gene1, gene2); rm(str.db.info, str.db.link); gc()
+    
+## Prepare intra.cellular ppi
+## Remove gene combo found in celltalkdb
+celltalk_gene <- celltalkdb %>% dplyr::select(source_genesymbol, target_genesymbol) %>%
+  dplyr::rename("gene1"="source_genesymbol", "gene2"="target_genesymbol") %>%
+  group_by(grp = paste(pmax(gene1, gene2), 
+                       pmin(gene1, gene2), sep = "_"))
+    
+  intra.ppi.gene <- ppi %>% 
+  group_by(grp = paste(pmax(gene1, gene2), 
+                       pmin(gene1, gene2), sep = "_")) %>%
+  dplyr::filter(!grp %in% celltalk_gene$grp) %>%
+  dplyr::filter(row_number() == 1) %>%
+  ungroup() %>%
+  dplyr::select(-grp) %>%
+  distinct()
+
+## Get info content for breast ##
+#################################
+bca.info.content <- list() ## Store res in list
+  
+for(ctrl in control_group) {
+  for(rg in run_group) {
+    ## load file
+    groupname <- paste0(ctrl,"_",rg)
+    message(paste0("Working on ", groupname))
+    load(paste0(files,"progressive_",ctrl,"_",rg,"_ppithres0_092324.rda"))
+    ## Process data
+    df <- as.data.frame(do.call(rbind, multi.gp["proposal"])) %>%
+      remove_rownames()
+    n.loci <- nrow(df)/1000
+    ## Get # of high confidence calls from the consensus run
+    consensus.gene <- get.consensus.run(data = df, loci = n.loci) %>% dplyr::select(locus, gene, celltype)
+    
+    ## Get OF hit
+    final.res <- getOFhits(data = consensus.gene, obj.fun = obj.fun) ## Get objective function hits for each locus
+    final.res$run <- groupname
+    final.res$type <- "BCa"
+    
+    bca.info.content[[groupname]] <- final.res 
+  }
+}
+
+bca.info.content <- as.data.frame(do.call(rbind, bca.info.content)) %>% remove_rownames()
+
+## Do the same for control like the breast
+files <- "/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/data/" 
+file <- list.files(files)
+control_group <- paste0("control", c(1:10))
+run_group <- paste0("run_", c(1:10))
+
+## Load data
+load("/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/gwas_gp_manu_data/breast_essential_092424.rda")
+
+ctrl.info.content <- list()
+
+for(ctrl in control_group) {
+  for(rg in run_group) {
+    ## load file
+    groupname <- paste0(ctrl,"_",rg)
+    message(paste0("Working on ", groupname))
+    load(paste0(files,"progressive_",ctrl,"_",rg,"_ppithres0_092324.rda"))
+    ## Process data
+    df <- as.data.frame(do.call(rbind, multi.gp["proposal"])) %>%
+      remove_rownames()
+    n.loci <- nrow(df)/1000
+    ## Get # of high confidence calls from the consensus run
+    consensus.gene <- get.consensus.run(data = df, loci = n.loci) %>% dplyr::select(locus, gene, celltype)
+    
+    #####################
+    ## Get OF function ##
+    ## Load all required data
+
+    ## Load control specific data
+    ## nearby gene
+    load(paste0("/drive-pool/data/peter_data/genetic_programming/control/",ctrl, "_nearbygenes.rda"))
+    nearbygenes <- nearbygenes_10xgenomics
+    ## common atac
+    load(paste0("/drive-pool/data/peter_data/genetic_programming/control/",ctrl, "_ld_atac.common.rda"))
+    common.atac.hit <- common.atac.hit %>% dplyr::select(locus, GroupReplicate, LEAD_SNP) %>%
+      dplyr::rename("celltype"="GroupReplicate") %>%
+      mutate(common.atac = 1) %>%
+      distinct() %>%
+      mutate(locus = LEAD_SNP) %>%
+      dplyr::select(-LEAD_SNP) %>%
+      distinct()
+    ## marker atac
+    load(paste0("/drive-pool/data/peter_data/genetic_programming/control/",ctrl, "_ld_atac.marker.rda"))
+    atac.marker <- atac.marker %>% dplyr::rename("marker.atac"="atac") %>%
+      mutate(locus = LEAD_SNP) %>%
+      dplyr::select(-LEAD_SNP) %>%
+      distinct()
+    ## promoter
+    load(paste0("/drive-pool/data/peter_data/genetic_programming/control/",ctrl, "_ld_promoter.df.rda"))
+    promoter.df <- promoter.df %>% mutate(locus = LEAD_SNP) %>%
+      dplyr::select(-LEAD_SNP) %>%
+      distinct()
+    ## We want PPI threshold to be 0 so remaking these data
+    load("/drive-pool/data/peter_data/genetic_programming/code/brca/ppi.map.rda"); rm(map.genes)
+
+    ppi.threshold <- 0.0 ## Confidence score for ppi interaction by stringdb. Medium confid 0.4; High confid 0.7; highest confid 0.9
+
+    ## Update the link data to have gene symbol
+    str.db.link <- str.db.link %>% dplyr::select(protein1, protein2, experiments,
+                                                 experiments_transferred, combined_score) %>%
+      left_join(x = ., y = str.db.info, by = c("protein1"="string_id")) %>%
+      dplyr::rename("gene1"="gene_symbol") %>%
+      left_join(x = ., y = str.db.info, by = c("protein2"="string_id")) %>%
+      dplyr::rename("gene2"="gene_symbol") %>%
+      .[,c("protein1", "protein2", "gene1", "gene2", "experiments", "experiments_transferred", "combined_score")]
+
+    ppi <- str.db.link %>% dplyr::filter(gene1 %in% nearbygenes$gene_name,
+                                         gene2 %in% nearbygenes$gene_name) %>% ## Filter for specific genes found in gwas 200kb
+      group_by(grp = paste(pmax(gene1, gene2), pmin(gene1, gene2), sep = "_")) %>%
+      dplyr::filter(row_number() == 1) %>%
+      ungroup() %>%
+      dplyr::select(-grp) %>%
+      distinct() %>%
+      mutate(experiments_score = compute_prior_away(score = experiments),
+             experiments_transferred_score = compute_prior_away(score = experiments_transferred)) %>%
+      mutate(experiments_both_prior_corrected = 1 - (1 - experiments_score) * (1 - experiments_transferred_score)) %>%
+      mutate(final_score = (experiments_both_prior_corrected * (1 - 0.041)) + 0.041) %>%
+      filter(final_score > ppi.threshold) %>%
+      dplyr::select(gene1, gene2); rm(str.db.info, str.db.link); gc()
+
+
+    ## Prepare intra.cellular ppi
+    ## Remove gene combo found in celltalkdb
+    celltalk_gene <- celltalkdb %>% dplyr::select(source_genesymbol, target_genesymbol) %>%
+      dplyr::rename("gene1"="source_genesymbol", "gene2"="target_genesymbol") %>%
+      group_by(grp = paste(pmax(gene1, gene2),
+                           pmin(gene1, gene2), sep = "_"))
+
+    intra.ppi.gene <- ppi %>%
+      group_by(grp = paste(pmax(gene1, gene2),
+                           pmin(gene1, gene2), sep = "_")) %>%
+      dplyr::filter(!grp %in% celltalk_gene$grp) %>%
+      dplyr::filter(row_number() == 1) %>%
+      ungroup() %>%
+      dplyr::select(-grp) %>%
+      distinct()
+    
+    ## Get OF hit
+    final.res <- getOFhits(data = consensus.gene, obj.fun = obj.fun) ## Get objective function hits for each locus
+    final.res$run <- groupname
+    final.res$type <- ctrl
+    
+    ctrl.info.content[[groupname]] <- final.res 
+  }
+}
+
+ctrl.info.content <- as.data.frame(do.call(rbind, ctrl.info.content)) %>% remove_rownames()
+
+
+save(ctrl.info.content, bca.info.content, file = "/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/gwas_gp_manu_data/bca_ctrl_info_content.rda")
+
+rm(list = ls(all.names = T)); gc()
+load("/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/gwas_gp_manu_data/bca_ctrl_info_content.rda")
+
+## breast and control runs
+bca.group <- unique(bca.info.content$run)
+ctrl.group <- unique(ctrl.info.content$run)
+
+combined.info.content <- list()
+
+for(n in c(bca.group, ctrl.group)) {
+  print(n)
+  if(grepl(pattern = "breast", x = n)) { ## If bca then do the following
+    info.content <- bca.info.content %>% dplyr::filter(run == n) %>%
+      dplyr::select(-gene, -celltype) %>%
+      gather(data = ., key = "of", value = "hits", -locus, -run, -type) %>%
+      dplyr::group_by(locus) %>%
+      dplyr::summarise(nOFs = sum(hits)) %>%
+      mutate(run = n,
+             type = "BCa")
+    combined.info.content[[n]] <- info.content
+  } else{ ## If ctrl do the following
+    info.content <- ctrl.info.content %>% dplyr::filter(run == n) %>%
+      dplyr::select(-gene, -celltype) %>%
+      gather(data = ., key = "of", value = "hits", -locus, -run, -type) %>%
+      dplyr::group_by(locus) %>%
+      dplyr::summarise(nOFs = sum(hits)) %>%
+      mutate(run = n,
+             type = "Control")
+    combined.info.content[[n]] <- info.content
+  }
+}
+
+combined.info.content <- as.data.frame(do.call(rbind, combined.info.content)) %>% remove_rownames()
+
+## Compare information content locus by locus using breast and control
+## To do this, we will take the 10 runs from BCa and the 100 locus matched to a specific SNP
+## Compare the two to see if the BCa is more than the ctrl
+
+load("/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/gwas_gp_manu_data/gwas_snps.rda") ## Finemap snp
+
+## Applying some fixes to chr pos cause not found in 1000genome. basically updating chr pos
+gwas_snps[which(gwas_snps$SNPS == "rs2380205"), "CHR_POS"] <- 5844771
+gwas_snps[which(gwas_snps$SNPS == "rs3048766"), "CHR_POS"] <- 68128293
+gwas_snps[which(gwas_snps$SNPS == "rs11374964"), "CHR_POS"] <- 108474788
+gwas_snps[which(gwas_snps$SNPS == "1296140"), "CHR_POS"] <- 108474788
+gwas_snps[which(gwas_snps$SNPS == "rs3833441"), "CHR_POS"] <- 111168154
+gwas_snps[which(gwas_snps$SNPS == "rs35054928"), "CHR_POS"] <- 121580917
+
+## Getting inputs that were used for vsampler
+vsamp.input <- gwas_snps %>% dplyr::select(SNP_ID_CURRENT, CHR_ID, CHR_POS) %>%
+  distinct() %>%
+  mutate(CHR_ID = as.integer(CHR_ID),
+         CHR_POS = as.integer(CHR_POS))
+
+## Uploading outputs of vsamplers
+vsamp.out <- data.table::fread("/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/code/vsampler/050924/anno.out.txt")
+n_query <- length(which(vsamp.out$LABEL == "query"))
+## Because there is 10 controls for every query, I have to make a column so I can filter for specific query and matched controls
+vsamp.out$GROUP <- rep(1:n_query, each = 11)
+vsamp.out <- vsamp.out %>% left_join(x = ., y = vsamp.input, by = c("CHR"="CHR_ID", "POS"="CHR_POS"))
+
+rsid <- vsamp.out %>% dplyr::filter(!is.na(SNP_ID_CURRENT)) %>% pull(SNP_ID_CURRENT)
+
+locus.by.locus.of.hit <- list()
+
+for(n in rsid) {
+  print(n)
+  ## Find query group
+  query.group <- vsamp.out %>% dplyr::filter(SNP_ID_CURRENT == n) %>% pull(GROUP)
+  ## Get all controls from query
+  ctrl.group <- vsamp.out %>% dplyr::filter(GROUP == query.group,
+                                            is.na(SNP_ID_CURRENT)) %>% ## NA means they are control
+    dplyr::select(LABEL, CHR, POS) %>%
+    mutate(locus = paste0("chr",CHR,":",POS))
+  
+  ## Filter the ctrl.info.content for any of those ctrl.group
+  spec.ctrl.info <- ctrl.info.content %>% dplyr::filter(locus %in% ctrl.group$locus) %>% 
+    dplyr::select(-locus, -gene, -celltype, -run, -type) %>%
+    rowSums()
+  
+  ## Filter the bca.info.content for rsid
+  spec.bca.info <- bca.info.content %>% dplyr::filter(locus %in% n) %>%
+    dplyr::select(-locus, -gene, -celltype, -run, -type) %>%
+    rowSums()
+  
+  ## Calculate to see if there is a diff
+  signif.test <- wilcox.test(spec.bca.info, spec.ctrl.info)
+  
+  ## Create df
+  df <- data.frame(rsid = n,
+                   bca.mean.of = mean(spec.bca.info),
+                   bca.sd.of = sd(spec.bca.info),
+                   ctrl.mean.of = mean(spec.ctrl.info),
+                   ctrl.sd.of = sd(spec.ctrl.info),
+                   wilcox.p = signif.test$p.value)
+  
+  ## Store data
+  locus.by.locus.of.hit[[n]] <- df
+}
+
+locus.by.locus.of.hit <- as.data.frame(do.call(rbind, locus.by.locus.of.hit))
+locus.by.locus.of.hit <- remove_rownames(locus.by.locus.of.hit)
+# save(locus.by.locus.of.hit, file = "/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/gwas_gp_manu_data/locus.by.locus.of.hit.rda")
+load("/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/gwas_gp_manu_data/locus.by.locus.of.hit.rda")
+
+locus.by.locus.of.hit$padj <- p.adjust(locus.by.locus.of.hit$wilcox.p, method = "BH")
+locus.by.locus.of.hit$diff.mean <- locus.by.locus.of.hit$bca.mean.of - locus.by.locus.of.hit$ctrl.mean.of
+signif.locus.by.locus <- locus.by.locus.of.hit %>% dplyr::filter(padj <= 0.05,
+                                                                 diff.mean > 0)
+
+ctrl.better <- locus.by.locus.of.hit %>% dplyr::filter(padj<=0.05,
+                                                       diff.mean<0)
+```
+
