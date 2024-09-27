@@ -22,10 +22,19 @@ map.of <- data.frame(axis2 = c("Marker Gene", "MAGMA", "Cancer Gene", "PPI", "Ma
                             "Intra-PPI", "LPI", "Promoter", "Marker ATAC", "Common ATAC"),
                      new.of = c("isMarkerGene", "isMAGMAgene", "isCancerGene", "isPPI", "isMarkerPPI", "isInterPPI",
                                 "isIntraPPI", "isLPI", "isPromoter", "isMarkerATAC", "isCommonATAC"))
+
+## Update snRNA/ATAC to have seq
+sankey.data[which(sankey.data$primary == "snRNA"), "primary"] <- "snRNA-seq"
+sankey.data[which(sankey.data$primary == "snATAC"), "primary"] <- "snATAC-seq"
+
+## Set column order
 sankey.data <- sankey.data %>% left_join(x = ., y = map.of, by = "axis2")
 sankey.data$new.of <- factor(x = sankey.data$new.of, levels = c("isMAGMAgene", "isCancerGene", "isPPI", "isLPI", "isPromoter",
                                                                 "isCommonATAC", "isMarkerATAC", "isMarkerGene", "isMarkerPPI",
                                                                 "isIntraPPI", "isInterPPI"))
+sankey.data$primary <- factor(x = sankey.data$primary, levels = c("MAGMA", "Cosmic CGC", "StringDB", "LncBook", "GRCh38",
+                                                                  "snRNA-seq", "snATAC-seq", "CellTalkDB"))
+sankey.data$axis3 <- factor(x = sankey.data$axis3, levels = c("Gene", "Cell"))
 
 ## Load kelly color for annotation
 load("/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/gwas_gp_manu_data/kelly.colours.rda")
@@ -38,7 +47,7 @@ p1 <- ggplot(sankey.data,
   geom_text(stat = "stratum", aes(label = after_stat(stratum)), size = 3, family = "Arial") +
   ylab("") +
   theme_minimal() +
-  scale_fill_manual(values = kelly.colours[c(7,8,6,5,4,3,10,12)]) +
+  scale_fill_manual(values = kelly.colours[c(7,8,5,6,4,3,10,12)]) +
   scale_x_continuous(breaks = 1:3, labels = c("Primary\nData Sources", "Objective\nFunction", "Inference")) +
   theme(panel.grid = element_blank(),
         axis.text.y = element_blank(),
