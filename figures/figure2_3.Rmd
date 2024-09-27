@@ -108,8 +108,8 @@ Create plot of individual fitness score
 ## Map df to convert code OF to clean OF names
 map.of <- data.frame(of = c("marker.gene", "magma", "cancer.gene", "ppi", "marker.ppi", "inter.ppi",
                             "intra.ppi", "lncrna", "promoter", "marker.atac", "common.atac"),
-                     new.of = c("Marker Gene", "MAGMA", "Cancer Gene", "PPI", "Marker PPI", "Inter-PPI",
-                                "Intra-PPI", "LPI", "Promoter", "Marker ATAC", "Common ATAC"))
+                     new.of = c("isMarkerGene", "isMAGMAgene", "isCancerGene", "isPPI", "isMarkerPPI", "isInterPPI",
+                                "isIntraPPI", "isLPI", "isPromoter", "isMarkerATAC", "isCommonATAC"))
 
 of.plotdata <- of.mean %>% dplyr::select(-fitness, -type, -omic) %>% 
   gather(data = ., key = of, value = score, -gen) %>% 
@@ -118,11 +118,11 @@ of.plotdata <- of.mean %>% dplyr::select(-fitness, -type, -omic) %>%
 p4 <- ggplot(data = of.plotdata, aes(x = gen, y = score, group = of)) +
   geom_line() + theme_minimal() +
   xlab("Generation") + ylab("OF Score") +
-  geom_label(aes(label = new.of), data = of.plotdata %>% filter(gen == 55, !new.of %in% c("Promoter", "Cancer Gene", "LPI", "Marker Gene")), nudge_x = 0.35, size = 2) +
-  geom_label(aes(label = new.of), data = of.plotdata %>% filter(gen == 55, new.of %in% c("Promoter")), nudge_x = 0.35, nudge_y = 0.02, size = 2) +
-  geom_label(aes(label = new.of), data = of.plotdata %>% filter(gen == 55, new.of %in% c("Cancer Gene")), nudge_x = 0.35, nudge_y = -0.01, size = 2) +
-  geom_label(aes(label = new.of), data = of.plotdata %>% filter(gen == 55, new.of %in% c("LPI")), nudge_x = 0.35, nudge_y = -0.02, size = 2) +
-  geom_label(aes(label = new.of), data = of.plotdata %>% filter(gen == 55, new.of %in% c("Marker Gene")), nudge_x = 0.35, nudge_y = 0.02, size = 2) +
+  geom_label(aes(label = new.of), data = of.plotdata %>% filter(gen == 55, !new.of %in% c("isPromoter", "isCancerGene", "isLPI", "isMarkerGene")), nudge_x = 0.35, size = 2) +
+  geom_label(aes(label = new.of), data = of.plotdata %>% filter(gen == 55, new.of %in% c("isPromoter")), nudge_x = 0.35, nudge_y = 0.02, size = 2) +
+  geom_label(aes(label = new.of), data = of.plotdata %>% filter(gen == 55, new.of %in% c("isCancerGene")), nudge_x = 0.35, nudge_y = -0.01, size = 2) +
+  geom_label(aes(label = new.of), data = of.plotdata %>% filter(gen == 55, new.of %in% c("isLPI")), nudge_x = 0.35, nudge_y = -0.02, size = 2) +
+  geom_label(aes(label = new.of), data = of.plotdata %>% filter(gen == 55, new.of %in% c("isMarkerGene")), nudge_x = 0.35, nudge_y = 0.02, size = 2) +
   theme(panel.grid = element_blank(),
         axis.line = element_line(colour = "black"))
 

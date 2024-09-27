@@ -17,19 +17,28 @@ Sankey plot to show categories of data
 sankey.data <- readxl::read_excel("/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/gwas_gp_manu_data/sankey.data.catalog_revised.xlsx")
 ## Add freq because sankey plots needs to know quantity
 sankey.data$freq <- 1
+## Convert to of names to boolean style function
+map.of <- data.frame(axis2 = c("Marker Gene", "MAGMA", "Cancer Gene", "PPI", "Marker PPI", "Inter-PPI",
+                            "Intra-PPI", "LPI", "Promoter", "Marker ATAC", "Common ATAC"),
+                     new.of = c("isMarkerGene", "isMAGMAgene", "isCancerGene", "isPPI", "isMarkerPPI", "isInterPPI",
+                                "isIntraPPI", "isLPI", "isPromoter", "isMarkerATAC", "isCommonATAC"))
+sankey.data <- sankey.data %>% left_join(x = ., y = map.of, by = "axis2")
+sankey.data$new.of <- factor(x = sankey.data$new.of, levels = c("isMAGMAgene", "isCancerGene", "isPPI", "isLPI", "isPromoter",
+                                                                "isCommonATAC", "isMarkerATAC", "isMarkerGene", "isMarkerPPI",
+                                                                "isIntraPPI", "isInterPPI"))
 
 ## Load kelly color for annotation
 load("/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/gwas_gp_manu_data/kelly.colours.rda")
 
 p1 <- ggplot(sankey.data,
        aes(y = freq,
-           axis1 = primary, axis2 = axis2, axis3 = axis3)) +
-  geom_alluvium(aes(fill = as.character(value))) + ## Annotate the OF number
-  geom_stratum(alpha = 0.5, width = c(rep(0.325,times=6), rep(.45,times=11), rep(0.325,times=2))) + ## Custom width size
+           axis1 = primary, axis2 = new.of, axis3 = axis3)) +
+  geom_alluvium(aes(fill = primary)) + ## Annotate the OF number
+  geom_stratum(alpha = 0.5, width = c(rep(0.325,times=8), rep(.45,times=11), rep(0.325,times=2))) + ## Custom width size
   geom_text(stat = "stratum", aes(label = after_stat(stratum)), size = 3, family = "Arial") +
   ylab("") +
   theme_minimal() +
-  scale_fill_manual(values = kelly.colours[2:22]) +
+  scale_fill_manual(values = kelly.colours[c(7,8,6,5,4,3,10,12)]) +
   scale_x_continuous(breaks = 1:3, labels = c("Primary\nData Sources", "Objective\nFunction", "Inference")) +
   theme(panel.grid = element_blank(),
         axis.text.y = element_blank(),
@@ -37,7 +46,6 @@ p1 <- ggplot(sankey.data,
         axis.title = element_blank(),
         text = element_text(family = "Arial"),
         legend.position = "none")
-p1
 
 layout <- "
 AAAAAAAA

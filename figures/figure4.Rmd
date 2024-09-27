@@ -193,8 +193,8 @@ bca.of.score <- as.data.frame(do.call(rbind, of.score)) %>%
 ## Map df to convert code OF to clean OF names
 map.of <- data.frame(of = c("marker.gene", "magma", "cancer.gene", "ppi", "marker.ppi", "inter.ppi",
                             "intra.ppi", "lncrna", "promoter", "marker.atac", "common.atac"),
-                     new.of = c("Marker Gene", "MAGMA", "Cancer Gene", "PPI", "Marker PPI", "Inter-PPI",
-                                "Intra-PPI", "LPI", "Promoter", "Marker ATAC", "Common ATAC"))
+                     new.of = c("isMarkerGene", "isMAGMAgene", "isCancerGene", "isPPI", "isMarkerPPI", "isInterPPI",
+                                "isIntraPPI", "isLPI", "isPromoter", "isMarkerATAC", "isCommonATAC"))
 
 of_combined_data <- rbind(bca.of.score, ctrl.of.score) %>% dplyr::filter(of != "fitness") %>%
   left_join(x = ., y = map.of, by = "of")
