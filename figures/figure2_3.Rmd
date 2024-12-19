@@ -12,9 +12,9 @@ library(ggridges)
 
 ```{r load-data}
 ## Load all functions used in GA. Not all in use.
-source("/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/code/gp_fun_update.R")
+source("/drive-pool/data/peter_data/repo/Inherited_Risk_GA/code/gp_fun_update.R")
 ## Load 1 sample
-load("/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/data/progressive_breast_run_10_ppithres0_092324.rda")
+load("/drive-pool/data/peter_data/repo/Inherited_Risk_GA/result/progressive_breast_run_1_ppithres0_110424.rda")
 ## Load colors 
 load("/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/gwas_gp_manu_data/kelly.colours.rda")
 load("/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/gwas_gp_manu_data/ditto.colours.rda")
@@ -51,7 +51,7 @@ p1 <- ggplot(data = individual.fitness.gen, aes(x = gen, y = fitness)) +
   geom_vline(xintercept = 123, linetype = "dashed", colour = "red") +
   theme(panel.grid = element_blank(),
         axis.line = element_line(colour = "black")) +
-  annotate(geom = "text", x = 123-50, y = 0.43, label = paste0("Gen=123"), color = "red", size = 3, family = "Arial")
+  annotate(geom = "text", x = 112-50, y = 0.43, label = paste0("Gen=112"), color = "red", size = 3, family = "Arial")
 ```
 
 Generate % change over 5 generations
@@ -98,7 +98,7 @@ p2 <- ggplot(data = perc.change.df, aes(x = gen, y = perc.change)) +
   geom_line() + theme_minimal() +
   xlab("Generation") + ylab("Percent Change") +
   xlim(ggplot_build(p1)$layout$panel_scales_x[[1]]$range$range) +
-  geom_vline(xintercept = 123, linetype = "dashed", colour = "red") +
+  geom_vline(xintercept = 112, linetype = "dashed", colour = "red") +
   theme(panel.grid = element_blank(),
         axis.line = element_line(colour = "black"))
 ```
@@ -107,9 +107,9 @@ Create plot of individual fitness score
 ```{r}
 ## Map df to convert code OF to clean OF names
 map.of <- data.frame(of = c("marker.gene", "magma", "cancer.gene", "ppi", "marker.ppi", "inter.ppi",
-                            "intra.ppi", "lncrna", "promoter", "marker.atac", "common.atac"),
+                            "intra.ppi", "lncrna", "promoter", "marker.atac", "common.atac", "htftarget", "mb.remap"),
                      new.of = c("isMarkerGene", "isMAGMAgene", "isCancerGene", "isPPI", "isMarkerPPI", "isInterPPI",
-                                "isIntraPPI", "isLPI", "isPromoter", "isMarkerATAC", "isCommonATAC"))
+                                "isIntraPPI", "isLPI", "isPromoter", "isMarkerATAC", "isCommonATAC", "isTFtarget", "isMBremap"))
 
 of.plotdata <- of.mean %>% dplyr::select(-fitness, -type, -omic) %>% 
   gather(data = ., key = of, value = score, -gen) %>% 
@@ -345,7 +345,7 @@ combined_plot1 <- p1 + p2 + p4 + plot_spacer() + plot_layout(design=layout, guid
         legend.text = element_text(size = 8),
         text = element_text(family = "Arial")) 
 # combined_plot
-ggsave("/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/figures//figure_2.png", width = 170, height = 170,
+ggsave("/drive-pool/data/peter_data/repo/Inherited_Risk_GA/figures/figure_2.png", width = 170, height = 170,
        units = "mm", dpi = 300)
 ```
 
@@ -371,7 +371,7 @@ combined_plot1 <- p7 + p8 + p5 + p6 + plot_spacer() + plot_layout(design=layout,
         legend.text = element_text(size = 8),
         text = element_text(family = "Arial")) 
 # combined_plot
-ggsave("/drive-pool/data/peter_data/repo/genetic_algorithm_gwas_sc/figures/figure_3.png", width = 170, height = 170,
+ggsave("/drive-pool/data/peter_data/repo/Inherited_Risk_GA/figures/figure_3.png", width = 170, height = 170,
        units = "mm", dpi = 300)
 ```
 

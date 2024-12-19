@@ -445,6 +445,102 @@ gwas_gp <- function(init.proposal, generations, obj.fun, khan.method, selection.
       obj.fun.res[["lncrna"]] <- lncrna.res
     } ## end of lncrna
     
+    #####################################################################
+    ## Transcription factor binding site disruption objective function ##
+    ## Does SNP have TFBS disruption and is TF expressed? 1 = yes; 0 = no
+    if("tfbs" %in% obj.fun) {
+      tfbs.obj <- mclapply(X = as.list(unique(df$n)), FUN = function(x) {
+        ## Get info on proposal
+        proposal.set <- df %>% dplyr::filter(n == x) %>%
+          left_join(x = ., y = tfbs.lookup, by = c("locus"="LEAD_SNP"), relationship = "many-to-many") %>% ## Append SNP tfbs info
+          left_join(x = ., y = ct.exp.lookup, by = c("celltype"="type", "geneSymbol"="gene_name"), relationship = "many-to-many") %>% ## Add celltype and tf gene info
+          dplyr::select(-geneSymbol, -providerId) %>% ## Remove column we don't need
+          dplyr::rename("tfbs"="tf.exp") %>% ## Rename tf.exp as tfbs
+          mutate(tfbs = replace_na(tfbs, replace = 0)) %>% ## Add 0 where NA is
+          dplyr::group_by(locus, celltype, gene) %>%
+          dplyr::summarise(tfbs = sum(tfbs), .groups = "keep") %>% ## sum all tfbs disrupt hits
+          mutate(tfbs = case_when(tfbs > 0 ~ 1, ## boolean value conversion
+                                  tfbs == 0 ~ 0),
+                 n = x) %>%
+          dplyr::select(celltype, locus, gene, n, tfbs) %>% ## Keep relevant column
+          dplyr::ungroup() ## ungroup data
+        
+        }, mc.cores = n.cores)
+      ## List to dataframe
+      tfbs.obj <- as.data.frame(do.call(rbind, tfbs.obj))
+      ## Proposal length == how many lead snps
+      proposal.length <- 206
+      ## Convert tfbs.obj to get OF score for each proposal
+      tfbs.res <- tfbs.obj %>% dplyr::group_by(n) %>% 
+        dplyr::summarise(tfbs = sum(tfbs)/proposal.length)
+      ## Store result
+      obj.fun.res[["tfbs"]] <- tfbs.res
+    } ## end of tfbs
+    
+    if("htftarget" %in% obj.fun) {
+      htftarget.obj <- mclapply(X = as.list(unique(df$n)), FUN = function(x) {
+        ## Step 1: Find out if any proposal gene is a TF.
+        proposal.set <- df %>% dplyr::filter(n == x) %>% dplyr::select(-n) %>%
+          left_join(x = ., y = distinct(breast.htftarget[,c("TF", "htftarget")]), by = c("gene"="TF")) %>%
+          mutate(htftarget = replace_na(htftarget, replace = 0))
+        
+        ## If TF gene is present
+        if(any(proposal.set$htftarget == 1)) { ## If htftarget == 1.. means we have a TF gene
+          tf.genes <- proposal.set %>% dplyr::filter(htftarget == 1) %>% pull(gene) ## what TF are present
+          ## Loop through each tf gene
+          for(tf.gene in tf.genes) {
+            filtered.tftarget <- breast.htftarget %>% dplyr::filter(TF %in% tf.gene) ## filter tftarget for hits
+            if(any(unique(filtered.tftarget$target) %in% unique(proposal.set$gene))) { ## If target gene is found for tf.gene then add 1 to htftarget
+              proposal.set[which(proposal.set$gene %in% c(unique(filtered.tftarget$target))), "htftarget"] <- 1
+            } else { ## If no target gene for the TF then set the TF to 0. Does not satisfy criteria
+              proposal.set[which(proposal.set$gene == tf.gene), "htftarget"] <- 0
+            }
+          }
+        } else { ## If TF target gene not present... set htftarget gene to 0 cause no criteria satisfied
+          proposal.set$htftarget <- 0
+        }
+        
+        proposal.set <- proposal.set %>% mutate(n = x) %>% ## Add proposal number 
+          dplyr::select(celltype, locus, gene, n, htftarget) ## reorder column
+        
+        return(proposal.set)
+        
+        }, mc.cores = n.cores)
+      
+      ## List to dataframe
+      htftarget.obj <- as.data.frame(do.call(rbind, htftarget.obj))
+      ## Proposal length == how many lead snps
+      proposal.length <- 206
+      ## Convert htftarget.obj to get OF score for each proposal
+      htftarget.res <- htftarget.obj %>% dplyr::group_by(n) %>% 
+        dplyr::summarise(htftarget = sum(htftarget)/proposal.length)
+      
+      obj.fun.res[["htftarget"]] <- htftarget.res
+    } ## End of htftarget
+    
+    if("mb.remap" %in% obj.fun) {
+      mb.remap.obj <- mclapply(X = as.list(unique(df$n)), FUN = function(x) {
+        ## Get info on proposal
+        proposal.set <- df %>% dplyr::filter(n == x) %>% dplyr::select(-n) %>%
+          left_join(x = ., y = distinct(mb.remap.ct[,c("snp","mb.remap","type")]), by = c("celltype"="type", "locus"="snp")) %>%
+          mutate(mb.remap = replace_na(mb.remap, replace = 0))
+        
+        proposal.set <- proposal.set %>% mutate(n = x) %>% ## Add proposal number 
+          dplyr::select(celltype, locus, gene, n, mb.remap) ## reorder column
+        
+      }, mc.cores = n.cores)
+      
+      ## List to dataframe
+      mb.remap.obj <- as.data.frame(do.call(rbind, mb.remap.obj))
+      ## Convert htftarget.obj to get OF score for each proposal
+      proposal.length <- 206
+      
+      mb.remap.res <- mb.remap.obj %>% dplyr::group_by(n) %>% 
+        dplyr::summarise(mb.remap = sum(mb.remap)/proposal.length)
+      
+      obj.fun.res[["mb.remap"]] <- mb.remap.res
+    } ## End of mb.remap
+    
     #####################################
     ## Fitness mean objective function ##
     
@@ -634,6 +730,8 @@ getOFmean <- function(data, type, omic) {
                      promoter = mean(promoter),
                      marker.atac = mean(marker.atac),
                      common.atac = mean(common.atac),
+                     htftarget = mean(htftarget),
+                     mb.remap = mean(mb.remap),
                      fitness = mean(fitness)) %>%
     mutate(type = type,
            omic = omic)
@@ -861,3 +959,12 @@ compute_prior_away <- function(score, prior = 0.041) {
   return(score_no_prior)
 }
 
+## Process motifbreakr to select only strong motif and relevant column for tfbs obj func
+get.mb.strong <- function(data) {
+  strong.effect <- data[data$effect == "strong",] ## Keep only strong effects
+  names(strong.effect) <- NULL ## Get rid of rownames... can't turn it into df 
+  strong.effect <- as.data.frame(strong.effect) %>% ## granges to df
+    dplyr::select(SNP_id, geneSymbol, providerId) %>%
+    mutate(providerId = gsub(pattern = "\\..*", replacement = "", providerId)) %>% 
+    distinct() 
+}

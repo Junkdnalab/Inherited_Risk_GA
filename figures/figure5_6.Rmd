@@ -529,7 +529,7 @@ ppi.adj <- ppi %>% mutate(experiments_score = compute_prior_away(score = experim
                           experiments_transferred_score = compute_prior_away(score = experiments_transferred)) %>%
       mutate(experiments_both_prior_corrected = 1 - (1 - experiments_score) * (1 - experiments_transferred_score)) %>%
       mutate(final_score = (experiments_both_prior_corrected * (1 - 0.041)) + 0.041) %>%
-      filter(final_score > .4)
+      filter(final_score > 0)
 
 ## How many loci participate in ppi?
 ppi.genes <- unique(c(ppi.adj$gene1, ppi.adj$gene2))
